@@ -80,8 +80,9 @@ public class MainActivity extends Activity {
     static final int SLOTS = 6;
 
     // index 0 = Auto: white car on the dark theme, black car on the light theme
-    static final String[] CAR_COLOR_NAMES = {"Auto (white at night, black by day)", "White", "Silver", "Grey", "Black", "Red", "Blue", "Beige"};
-    static final int[] CAR_COLORS = {0, 0xFFF4F5F7, 0xFFC4C8CE, 0xFF70757D, 0xFF2C2F35, 0xFFC2242C, 0xFF2E5BB8, 0xFFCBB896};
+    static final String[] CAR_COLOR_NAMES = {"Auto (white at night, black by day)", "White", "Silver", "Grey", "Black", "Red", "Blue", "Teal", "Orange", "Beige"};
+    static final int[] CAR_COLORS = {0, 0xFFF4F5F7, 0xFFC4C8CE, 0xFF70757D, 0xFF2C2F35, 0xFFC2242C, 0xFF2E5BB8, 0xFF1E8C93, 0xFFE0702A, 0xFFCBB896};
+    static final String[] CAR_STYLE_NAMES = {"Hatchback (2014 Accent hatch)", "Sedan"};
     static final String[] THEME_NAMES = {"Auto: light 5 am – 6 pm", "Auto: real sunrise / sunset (GPS)", "Always dark", "Always light"};
     static final int[] ALERTS = {0, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130};
 
@@ -119,7 +120,8 @@ public class MainActivity extends Activity {
     TextView camStatus, camInfo, camFront, camRear, camLive;
     DashCam cam;
     boolean camOpen, camRearOn, camHasFailed;
-    boolean lastPlaying, lastMuteIcon, iconsInit;
+    boolean lastPlaying, lastMuteIcon, iconsInit, lastSkipBack;
+    String trackKey;
     SimpleDateFormat clockFmt, dateFmt;
     String clockKey;
 
@@ -179,6 +181,9 @@ public class MainActivity extends Activity {
         volBar = findViewById(R.id.vol);
         content = findViewById(R.id.content);
         drivePanel = findViewById(R.id.drivePanel);
+        drivePanel.addOnLayoutChangeListener((v, pl, pt, pr, pb, ol, ot, or, ob) -> {
+            if (pr - pl != panelW || pb - pt != panelH) { panelW = pr - pl; panelH = pb - pt; ui.post(this::sizeDrivePanel); }
+        });
         rightCol = findViewById(R.id.rightCol);
         dock = findViewById(R.id.dock);
         drawer = findViewById(R.id.drawer);
@@ -195,6 +200,7 @@ public class MainActivity extends Activity {
         mainView = findViewById(R.id.main);
         camBtn = findViewById(R.id.camBtn);
         refreshTheme(true); // before the first frame, so there is never a wrong-theme flash
+        drive.welcome();    // car fades in, lamps flash once
         booster = new Booster(this, sp, ui, listenerCn, new BoostL());
         setupCam();
         ramTv.setOnClickListener(v -> manualClean());
@@ -205,6 +211,20 @@ public class MainActivity extends Activity {
         speedTv.setFontFeatureSettings("tnum"); // fixed-width digits: no jitter as speed changes
 
         artIv.setClipToOutline(true);
+        mediaCard.addOnLayoutChangeListener((v, l, t, r, bt, ol, ot, or, ob) -> {
+            if (r - l != or - ol || bt - t != ob - ot) ui.post(this::sizeMediaButtons);
+        });
+
+        // touch feedback: everything you can press gives a little (GPU scale, no redraw)
+        for (View v : new View[]{playBtn, prevBtn, nextBtn, muteBtn, settingsBtn, camBtn, ramTv}) if (v != null) Anim.press(v, 0.88f);
+        mediaCard.setOnTouchListener(new Swipe(artIv, getResources().getDisplayMetrics().density, this::skip)); // swipe = next / previous
+        Anim.press(speedBox, 0.95f);
+        if (b == null) { // cold start: the dashboard rises in, card by card
+            float d = dp(26);
+            Anim.rise(drivePanel, d, 0);
+            Anim.rise(rightCol, d, 80);
+            Anim.rise(dock, d, 160);
+        }
 
         gridAdapter = new AppAdapter();
         grid.setAdapter(gridAdapter);
@@ -318,7 +338,7 @@ public class MainActivity extends Activity {
     @Override
     public void onBackPressed() {
         if (camOpen) { closeCam(); return; }
-        if (drawer.getVisibility() == View.VISIBLE) hideDrawer();
+        if (drawerOpen) hideDrawer();
         // a launcher never finishes on back
     }
 
@@ -366,27 +386,49 @@ public class MainActivity extends Activity {
                 : new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, dashLayout() ? 66f : 62f));
     }
 
+    static final String[] BAR_NAMES = {"Show status bar + nav bar", "Hide status bar (more room, swipe down to peek)", "Hide status bar + nav bar"};
+
+    /** 0 = show both, 1 = hide the status bar (default: most head units leave it empty), 2 = hide both. */
+    int barsMode() {
+        if (!sp.contains("bars")) return sp.getBoolean("immersive", false) ? 2 : 1; // older setting
+        return Math.max(0, Math.min(2, sp.getInt("bars", 1)));
+    }
+
     @SuppressWarnings("deprecation")
     void applyImmersive() {
-        boolean on = sp.getBoolean("immersive", false);
+        int mode = barsMode();
         Window w = getWindow();
         if (Build.VERSION.SDK_INT >= 30) {
             WindowInsetsController c = w.getInsetsController();
             if (c == null) return;
-            if (on) {
-                c.hide(WindowInsets.Type.systemBars());
-                c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-            } else {
+            c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            if (mode == 0) {
                 c.show(WindowInsets.Type.systemBars());
+            } else if (mode == 1) {
+                c.hide(WindowInsets.Type.statusBars());
+                c.show(WindowInsets.Type.navigationBars());
+            } else {
+                c.hide(WindowInsets.Type.systemBars());
             }
         } else {
             int lightBars = look != null && look.light
                     ? View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR : 0;
-            w.getDecorView().setSystemUiVisibility(lightBars | (on
-                    ? View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_FULLSCREEN
-                    | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                    : 0));
+            int hide = mode == 0 ? 0 : mode == 1 ? View.SYSTEM_UI_FLAG_FULLSCREEN
+                    : View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_STABLE;
+            w.getDecorView().setSystemUiVisibility(lightBars | hide);
         }
+    }
+
+    void pickBars() {
+        new AlertDialog.Builder(this, dlg())
+                .setTitle("System bars on the home screen")
+                .setSingleChoiceItems(BAR_NAMES, barsMode(), (d, w) -> {
+                    sp.edit().putInt("bars", w).remove("immersive").apply();
+                    d.dismiss();
+                    applyImmersive();
+                })
+                .show();
     }
 
     // ------------------------------------------------------------------ receivers
@@ -483,6 +525,39 @@ public class MainActivity extends Activity {
         }
     };
 
+    // ------------------------------------------------------------------ responsive drive panel
+
+    int panelW, panelH;
+
+    /**
+     * Speed and clock are sized from the panel's real size (not fixed sp), so they're big on a
+     * 10" 1280x720 unit and still fit side by side on 1024x600 or in the Dash cam layout.
+     * Runs only when the panel size changes.
+     */
+    void sizeDrivePanel() {
+        int w = panelW - drivePanel.getPaddingLeft() - drivePanel.getPaddingRight();
+        int h = panelH - drivePanel.getPaddingTop() - drivePanel.getPaddingBottom();
+        if (w <= 0 || h <= 0) return;
+        float speed = clamp(h * 0.19f, dp(56), dp(132));
+        float clock = clamp(h * 0.135f, dp(40), dp(100));
+        // both must fit on one row with room to spare: measure real glyph widths
+        android.text.TextPaint sp1 = new android.text.TextPaint(speedTv.getPaint()), cp = new android.text.TextPaint(clockTv.getPaint());
+        sp1.setTextSize(speed);
+        cp.setTextSize(clock);
+        float need = sp1.measureText("188") + cp.measureText("88:88") + dp(18);
+        if (need > w) { float k = w / need; speed *= k; clock *= k; }
+        float small = clamp(h * 0.03f, dp(12), dp(18)), chip = clamp(h * 0.024f, dp(11), dp(15));
+        speedTv.setTextSize(TypedValue.COMPLEX_UNIT_PX, speed);
+        clockTv.setTextSize(TypedValue.COMPLEX_UNIT_PX, clock);
+        unitTv.setTextSize(TypedValue.COMPLEX_UNIT_PX, small);
+        headingTv.setTextSize(TypedValue.COMPLEX_UNIT_PX, small);
+        dateTv.setTextSize(TypedValue.COMPLEX_UNIT_PX, small);
+        gpsTv.setTextSize(TypedValue.COMPLEX_UNIT_PX, chip);
+        ramTv.setTextSize(TypedValue.COMPLEX_UNIT_PX, chip);
+    }
+
+    static float clamp(float v, float lo, float hi) { return Math.max(lo, Math.min(hi, v)); }
+
     // ------------------------------------------------------------------ clock
 
     void updateClock() {
@@ -551,7 +626,7 @@ public class MainActivity extends Activity {
         if (s < 0.6f) s = 0f; // kill standstill jitter
         renderSpeed(s);
         setT(gpsTv, l.hasAccuracy() ? "GPS · ±" + Math.round(l.getAccuracy()) + " M" : "GPS · LOCKED");
-        if (l.hasBearing() && s > 1.5f) setT(headingTv, "HEADING " + compass(l.getBearing()));
+        if (l.hasBearing() && s > 1.5f) setT(headingTv, "\u00B7  " + compass(l.getBearing()));
         rememberPlace(l);
     }
 
@@ -568,17 +643,51 @@ public class MainActivity extends Activity {
         drive.setSpeed(ms);
         updateCamInfo();
         if (ms < 0) {
+            if (speedAnim != null) speedAnim.cancel();
+            shownV = -1;
             setT(speedTv, "--");
             speedTv.setTextColor(look.text);
             if (saverOn) saver.setSpeed("");
             return;
         }
         int v = Math.round(ms * (mph() ? 2.23694f : 3.6f));
-        setT(speedTv, Integer.toString(v));
+        showSpeedNumber(v);
         if (saverOn) saver.setSpeed(v >= 5 ? v + (mph() ? " MPH" : " KM/H") : "");
         int alert = sp.getInt("alert", 0);
         int col = alert > 0 && v > alert ? look.alert : look.text;
         if (speedTv.getCurrentTextColor() != col) speedTv.setTextColor(col);
+    }
+
+    android.animation.ValueAnimator speedAnim;
+    int shownV = -1, fromV, toV;
+
+    /**
+     * The speed number rolls through the values in between (48, 49, 50, 51) instead of jumping once
+     * a second. One reusable animator; the text is only touched when the shown integer changes, and
+     * the view's size never changes (fixed-width digits), so it's an invalidate, never a re-layout.
+     */
+    void showSpeedNumber(int v) {
+        if (shownV < 0 || !resumed || saverOn || Math.abs(v - shownV) > 60) {
+            if (speedAnim != null) speedAnim.cancel();
+            shownV = v;
+            setT(speedTv, Integer.toString(v));
+            return;
+        }
+        if (v == toV && speedAnim != null && speedAnim.isRunning()) return;
+        if (v == shownV) { if (speedAnim != null) speedAnim.cancel(); toV = v; return; }
+        if (speedAnim == null) {
+            speedAnim = android.animation.ValueAnimator.ofFloat(0f, 1f);
+            speedAnim.setInterpolator(new android.view.animation.DecelerateInterpolator(1.4f));
+            speedAnim.addUpdateListener(a -> {
+                int cur = Math.round(fromV + (toV - fromV) * a.getAnimatedFraction());
+                if (cur != shownV) { shownV = cur; setT(speedTv, Integer.toString(cur)); }
+            });
+        }
+        speedAnim.cancel();
+        fromV = shownV;
+        toV = v;
+        speedAnim.setDuration(Math.min(800, 160 + 40L * Math.abs(v - fromV)));
+        speedAnim.start();
     }
 
     static String compass(float b) {
@@ -693,12 +802,26 @@ public class MainActivity extends Activity {
         String t = first(m, MediaMetadata.METADATA_KEY_TITLE, MediaMetadata.METADATA_KEY_DISPLAY_TITLE);
         String a = first(m, MediaMetadata.METADATA_KEY_ARTIST, MediaMetadata.METADATA_KEY_ALBUM_ARTIST,
                 MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE, MediaMetadata.METADATA_KEY_ALBUM);
+        String key = t + "\u0000" + a;
+        boolean newTrack = trackKey != null && !key.equals(trackKey);
+        trackKey = key;
         setT(titleTv, t == null ? "Unknown title" : t);
         setT(artistTv, a == null ? "" : a);
         Bitmap b = m.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART);
         if (b == null) b = m.getBitmap(MediaMetadata.METADATA_KEY_ART);
         if (b == null) b = m.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON);
+        boolean artArrived = artBmp == null && b != null; // some players send the art a moment after the title
         setArt(b);
+        if (resumed && !saverOn) {
+            // next track: title + artist slide in, art grows in (GPU-only property animations)
+            if (newTrack) {
+                float d = dp(lastSkipBack ? -18 : 18);
+                Anim.slideIn(titleTv, d, 0);
+                Anim.slideIn(artistTv, d, 50);
+                lastSkipBack = false;
+            }
+            if (newTrack || artArrived) Anim.growIn(artIv);
+        }
         duration = m.getLong(MediaMetadata.METADATA_KEY_DURATION);
         if (saverOn) saver.setNowPlaying(nowPlayingLine());
     }
@@ -723,13 +846,69 @@ public class MainActivity extends Activity {
             artIv.setScaleType(ImageView.ScaleType.CENTER_CROP);
             artIv.setImageBitmap(b);
         }
+        artTint = b == null ? 0 : artColor(b);
+        applyMediaTint();
+    }
+
+    int artTint; // most vivid colour of the current album art, 0 = none
+
+    /** The art's most vivid colour: 8x8 downscale, pick by saturation x brightness. Runs once per track. */
+    static int artColor(Bitmap b) {
+        try {
+            Bitmap s = Bitmap.createScaledBitmap(b, 8, 8, true);
+            float[] hsv = new float[3];
+            float best = 0;
+            int pick = 0;
+            for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) {
+                int c = s.getPixel(x, y);
+                android.graphics.Color.colorToHSV(c, hsv);
+                float score = hsv[1] * (0.35f + hsv[2]);
+                if (score > best) { best = score; pick = c; }
+            }
+            if (s != b) s.recycle();
+            return best < 0.18f ? 0 : (pick | 0xFF000000); // greyscale art: no tint
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /** Media card picks up a soft wash of the album colour; the progress line takes the colour too. */
+    void applyMediaTint() {
+        if (look == null || mediaCard == null) return;
+        int one = Math.max(1, dp(1));
+        if (artTint == 0) {
+            mediaCard.setBackground(look.card(dp(20), one));
+            prog.setProgressTintList(look.csl(look.text));
+            return;
+        }
+        float[] hsv = new float[3];
+        android.graphics.Color.colorToHSV(artTint, hsv);
+        int wash = blend(look.card, artTint, look.light ? 0.16f : 0.24f);
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TL_BR, new int[]{wash, look.card, look.card});
+        g.setCornerRadius(dp(20));
+        g.setStroke(one, look.line);
+        mediaCard.setBackground(g);
+        // readable accent: deep on the light theme, bright on the dark one
+        float[] a = {hsv[0], Math.max(hsv[1], 0.45f), look.light ? Math.min(hsv[2], 0.55f) : Math.max(hsv[2], 0.85f)};
+        if (!look.light) a[1] = Math.min(a[1], 0.65f);
+        prog.setProgressTintList(look.csl(android.graphics.Color.HSVToColor(a)));
+    }
+
+    static int blend(int a, int b, float t) {
+        int r = (int) (((a >> 16) & 255) * (1 - t) + ((b >> 16) & 255) * t);
+        int g = (int) (((a >> 8) & 255) * (1 - t) + ((b >> 8) & 255) * t);
+        int bl = (int) ((a & 255) * (1 - t) + (b & 255) * t);
+        return 0xFF000000 | (r << 16) | (g << 8) | bl;
     }
 
     void renderState() {
         boolean p = ctl != null && isPlaying(ctl);
         if (p != lastPlaying || !iconsInit) {
+            boolean change = iconsInit && p != lastPlaying;
             lastPlaying = p;
             playBtn.setImageResource(p ? R.drawable.ic_pause : R.drawable.ic_play);
+            if (change && resumed && !saverOn) Anim.pop(playBtn);
         }
         long next = updateProgress();
         ui.removeCallbacks(ticker);
@@ -750,7 +929,8 @@ public class MainActivity extends Activity {
             pos += (long) ((SystemClock.elapsedRealtime() - s.getLastPositionUpdateTime()) * s.getPlaybackSpeed());
         }
         pos = Math.max(0, Math.min(pos, duration));
-        prog.setProgress((int) (pos * 1000 / duration));
+        int pv = (int) (pos * 1000 / duration);
+        prog.setProgress(pv, Math.abs(pv - prog.getProgress()) > 25); // glide on seeks / new track, step otherwise
         setT(posTv, fmt(pos));
         setT(durTv, fmt(duration));
         float speed = Math.max(0.25f, Math.abs(s.getPlaybackSpeed()));
@@ -791,6 +971,7 @@ public class MainActivity extends Activity {
     }
 
     void skip(boolean next) {
+        lastSkipBack = !next;
         if (ctl != null) {
             if (next) ctl.getTransportControls().skipToNext();
             else ctl.getTransportControls().skipToPrevious();
@@ -859,7 +1040,7 @@ public class MainActivity extends Activity {
     void syncVolume() {
         int v = am.getStreamVolume(AudioManager.STREAM_MUSIC);
         boolean muted = am.isStreamMute(AudioManager.STREAM_MUSIC);
-        if (!draggingVol) volBar.setProgress(v);
+        if (!draggingVol && v != volBar.getProgress()) volBar.setProgress(v, iconsInit && resumed);
         setT(volTxt, muted ? "" : String.valueOf(v));
         boolean off = muted || v == 0;
         if (off != lastMuteIcon || !iconsInit) {
@@ -980,20 +1161,36 @@ public class MainActivity extends Activity {
         startSafe(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + pkg)));
     }
 
+    boolean drawerOpen;
+
     void showDrawer() {
         if (!appsLoaded) loadApps(null);
+        drawerOpen = true;
+        drawer.animate().cancel();
         drawer.setAlpha(0f);
+        drawer.setScaleX(1.04f);
+        drawer.setScaleY(1.04f);
         drawer.setVisibility(View.VISIBLE);
         drive.setActive(false); // hidden behind the drawer: don't animate it
-        drawer.animate().alpha(1f).setDuration(140).withLayer().start();
+        // settles in from slightly zoomed: one GPU layer, composited, nothing re-drawn per frame
+        drawer.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(200)
+                .setInterpolator(Anim.OUT).withLayer().start();
     }
 
     void hideDrawer() {
-        if (drawer.getVisibility() != View.VISIBLE) return;
+        if (!drawerOpen) return;
+        drawerOpen = false;
         drawer.animate().cancel();
-        drawer.setVisibility(View.GONE);
         drive.setActive(resumed && !saverOn);
-        grid.setSelection(0);
+        if (resumed) {
+            drawer.animate().alpha(0f).scaleX(1.03f).scaleY(1.03f).setStartDelay(0).setDuration(140)
+                    .setInterpolator(Anim.OUT).withLayer()
+                    .withEndAction(() -> { if (!drawerOpen) { drawer.setVisibility(View.GONE); grid.setSelection(0); } })
+                    .start();
+        } else {
+            drawer.setVisibility(View.GONE);
+            grid.setSelection(0);
+        }
     }
 
     class AppAdapter extends BaseAdapter {
@@ -1078,7 +1275,7 @@ public class MainActivity extends Activity {
                 b.setContentDescription(e.label);
             } else if (pkg == null || appsLoaded) {
                 b.setImageResource(R.drawable.ic_add);
-                b.setPadding(dp(16), dp(16), dp(16), dp(16));
+                b.setPadding(dp(21), dp(21), dp(21), dp(21));
             }
             b.setOnClickListener(v -> {
                 if (pkg == null || (appsLoaded && !byPkg.containsKey(pkg))) pickDock(slot);
@@ -1090,7 +1287,7 @@ public class MainActivity extends Activity {
         ImageButton all = dockButton();
         all.setImageResource(R.drawable.ic_apps);
         all.setColorFilter(look.text2);
-        all.setPadding(dp(15), dp(15), dp(15), dp(15));
+        all.setPadding(dp(19), dp(19), dp(19), dp(19));
         all.setOnClickListener(v -> showDrawer());
         dock.addView(all);
     }
@@ -1099,10 +1296,11 @@ public class MainActivity extends Activity {
         ImageButton b = new ImageButton(this);
         b.setBackground(look.slot(dp(16)));
         b.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        b.setPadding(dp(9), dp(9), dp(9), dp(9));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(56), dp(56));
-        lp.leftMargin = lp.rightMargin = dp(6);
+        b.setPadding(dp(8), dp(8), dp(8), dp(8));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(66), dp(66));
+        lp.leftMargin = lp.rightMargin = dp(7);
         b.setLayoutParams(lp);
+        Anim.press(b, 0.88f);
         return b;
     }
 
@@ -1167,7 +1365,6 @@ public class MainActivity extends Activity {
     }
 
     void showSettings() {
-        final boolean imm = sp.getBoolean("immersive", false);
         final boolean locOk = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
         final int alert = sp.getInt("alert", 0);
         final String unit = mph() ? "mph" : "km/h";
@@ -1177,9 +1374,16 @@ public class MainActivity extends Activity {
         labels.add("Music player:  " + playerLabel());                           acts.add(this::pickPlayer);
         labels.add("Theme:  " + THEME_NAMES[themeMode()]);                       acts.add(this::pickTheme);
         labels.add("Car colour:  " + CAR_COLOR_NAMES[carColorIndex()]);          acts.add(this::pickCarColor);
+        labels.add("Car style:  " + (carStyle() == CarArt.SEDAN ? "Sedan" : "Hatchback")); acts.add(this::pickCarStyle);
+        labels.add("Car view:  " + (carView() == DriveView.REAR ? "behind the car" : "top-down")); acts.add(this::pickCarView);
+        final String pl = plateText();
+        labels.add("Number plate:  " + (pl.isEmpty() ? "blank" : pl));            acts.add(this::pickPlate);
         labels.add("Speed units:  " + unit);                                     acts.add(this::toggleUnits);
         labels.add("Speed alert:  " + (alert == 0 ? "off" : alert + " " + unit)); acts.add(this::pickAlert);
         labels.add("Screensaver:  " + (saverMin == 0 ? "off" : "after " + saverMin + " min idle")); acts.add(this::pickSaver);
+        final boolean saverCar = sp.getBoolean("saverCar", true);
+        labels.add("Parked car on screensaver:  " + (saverCar ? "on" : "off"));
+        acts.add(() -> { sp.edit().putBoolean("saverCar", !saverCar).apply(); applyCar(); toast("Parked car on screensaver: " + (!saverCar ? "on" : "off")); });
         labels.add("RAM optimiser…");                                            acts.add(this::showOptimizer);
         labels.add("Layout:  " + (dashLayout() ? "Dash cam" : "Standard"));       acts.add(this::pickLayout);
         labels.add("Dash cam…");                                                 acts.add(this::showCamSettings);
@@ -1193,8 +1397,7 @@ public class MainActivity extends Activity {
             else requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION,
                     Manifest.permission.ACCESS_COARSE_LOCATION}, 1);
         });
-        labels.add("Hide status/nav bars:  " + (imm ? "on" : "off"));
-        acts.add(() -> { sp.edit().putBoolean("immersive", !imm).apply(); applyImmersive(); });
+        labels.add("System bars:  " + new String[]{"shown", "status bar hidden", "all hidden"}[barsMode()]); acts.add(this::pickBars);
         labels.add("Set CarDash as Home app");
         acts.add(() -> { if (!tryStart(new Intent(Settings.ACTION_HOME_SETTINGS))) startSafe(new Intent(Settings.ACTION_SETTINGS)); });
         labels.add("Reset dock to defaults");
@@ -1222,10 +1425,85 @@ public class MainActivity extends Activity {
                 .setTitle("Car colour")
                 .setSingleChoiceItems(CAR_COLOR_NAMES, carColorIndex(), (d, w) -> {
                     sp.edit().putInt("carColor", CAR_COLORS[w]).apply();
-                    drive.setCarColor(carColor());
+                    applyCar();
                     d.dismiss();
                 })
                 .show();
+    }
+
+    int carStyle() { return sp.getInt("carStyle", CarArt.HATCH) == CarArt.SEDAN ? CarArt.SEDAN : CarArt.HATCH; }
+
+    void pickCarStyle() {
+        new AlertDialog.Builder(this, dlg())
+                .setTitle("Car style")
+                .setSingleChoiceItems(CAR_STYLE_NAMES, carStyle(), (d, w) -> {
+                    sp.edit().putInt("carStyle", w).apply();
+                    applyCar();
+                    d.dismiss();
+                })
+                .show();
+    }
+
+    /** Push style + colour + theme to the dashboard car (cross-fades) and the screensaver car. */
+    int carView() { return sp.getInt("carView", DriveView.TOP) == DriveView.REAR ? DriveView.REAR : DriveView.TOP; }
+
+    String plateText() { return sp.getString("plate", "CARDASH"); }
+
+    void pickCarView() {
+        String[] names = {"Top-down (bird's-eye)", "Behind the car (chase cam, number plate)"};
+        new AlertDialog.Builder(this, dlg())
+                .setTitle("Car view")
+                .setSingleChoiceItems(names, carView(), (d, w) -> {
+                    sp.edit().putInt("carView", w).apply();
+                    applyCar();
+                    d.dismiss();
+                })
+                .show();
+    }
+
+    /** Number plate text for the chase-cam view: letters, digits, space, dash, dot; up to 10. */
+    void pickPlate() {
+        final android.widget.EditText et = new android.widget.EditText(this);
+        et.setSingleLine(true);
+        et.setText(plateText());
+        et.setSelectAllOnFocus(true);
+        et.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
+        et.setTypeface(android.graphics.Typeface.create("sans-serif-condensed", android.graphics.Typeface.BOLD));
+        et.setLetterSpacing(0.08f);
+        et.setTextColor(look.text);
+        et.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+                | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        et.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.AllCaps(), new android.text.InputFilter.LengthFilter(10),
+                (src, st, en, dst, ds, de) -> {
+                    StringBuilder b = new StringBuilder();
+                    for (int i = st; i < en; i++) {
+                        char ch = src.charAt(i);
+                        if (Character.isLetterOrDigit(ch) || ch == ' ' || ch == '-' || ch == '.') b.append(ch);
+                    }
+                    return b.length() == en - st ? null : b;
+                }});
+        FrameLayout box = new FrameLayout(this);
+        int p = dp(22);
+        box.setPadding(p, dp(8), p, 0);
+        box.addView(et);
+        AlertDialog dl = new AlertDialog.Builder(this, dlg())
+                .setTitle("Number plate (chase-cam view)")
+                .setView(box)
+                .setPositiveButton("Save", (d, w) -> {
+                    sp.edit().putString("plate", et.getText().toString().trim().replaceAll("\\s+", " ")).apply();
+                    applyCar();
+                })
+                .setNeutralButton("Clear", (d, w) -> { sp.edit().putString("plate", "").apply(); applyCar(); })
+                .setNegativeButton("Cancel", null)
+                .create();
+        if (dl.getWindow() != null) dl.getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE);
+        dl.show();
+        et.requestFocus();
+    }
+
+    void applyCar() {
+        drive.setLook(carView(), carStyle(), carColor(), look.light, plateText(), look.card);
+        saver.setCar(sp.getBoolean("saverCar", true) ? carStyle() : -1, sp.getInt("carColor", 0));
     }
 
     // ------------------------------------------------------------------ theme
@@ -1333,15 +1611,15 @@ public class MainActivity extends Activity {
         muteBtn.setBackground(L.rippleRound());
         ((ImageButton) settingsBtn).setImageTintList(t2);
         prog.setProgressTintList(t1);
-        prog.setProgressBackgroundTintList(ln);
+        prog.setProgressBackgroundTintList(L.csl(L.track));
         volBar.setProgressTintList(t1);
-        volBar.setProgressBackgroundTintList(ln);
+        volBar.setProgressBackgroundTintList(L.csl(L.track));
         volBar.setThumbTintList(t1);
 
-        drive.setLight(L.light);
-        drive.setCarColor(carColor());
+        applyCar();
         if (artBmp == null) setArt(null);
         renderSpeed(lastSpeed);
+        applyMediaTint();
         if (gridAdapter != null) { gridAdapter.notifyDataSetChanged(); buildDock(); }
     }
 
@@ -1785,25 +2063,50 @@ public class MainActivity extends Activity {
         mediaCard.setPadding(pad, pad, pad, pad);
         appTv.setVisibility(dash ? View.GONE : View.VISIBLE);
         ((View) posTv.getParent()).setVisibility(dash ? View.GONE : View.VISIBLE);
-        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, dash ? 18 : 22);
-        artistTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, dash ? 14 : 15);
+        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, dash ? 19 : 26);
+        artistTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, dash ? 14 : 17);
         ((LinearLayout.LayoutParams) prog.getLayoutParams()).topMargin = dp(dash ? 8 : 16);
-        sizeBtn(prevBtn, dash ? 44 : 54, 0);
-        sizeBtn(nextBtn, dash ? 44 : 54, 0);
-        sizeBtn(playBtn, dash ? 52 : 64, dash ? 14 : 22);
-        playBtn.setPadding(dp(dash ? 14 : 17), dp(dash ? 14 : 17), dp(dash ? 14 : 17), dp(dash ? 14 : 17));
-        ((LinearLayout.LayoutParams) ((View) playBtn.getParent()).getLayoutParams()).topMargin = dp(dash ? 4 : 8);
+        ctlW = -1;
+        sizeMediaButtons();
+        ((LinearLayout.LayoutParams) ((View) playBtn.getParent()).getLayoutParams()).topMargin = dp(dash ? 2 : 10);
         mediaCard.requestLayout();
         applyOrientation(getResources().getConfiguration());
         updateCamSession();
         if (dash && resumed) { ui.removeCallbacks(linkCheck); ui.postDelayed(linkCheck, 5000); }
     }
 
-    void sizeBtn(View b, int sizeDp, int sideMarginDp) {
+    int ctlW = -1;
+
+    /**
+     * Big, well-spaced media buttons (pressed while driving): previous / next 92 dp, play 96 dp
+     * (Dash cam layout 78 / 82 dp), shrunk only if the row is too narrow to hold them.
+     * Re-run when the controls row changes width.
+     */
+    void sizeMediaButtons() {
+        View row = (View) playBtn.getParent();
+        int avail = row.getWidth();
+        int key = avail * 4096 + mediaCard.getHeight();
+        if (avail > 0 && key == ctlW) return;
+        ctlW = key;
+        boolean dash = dashLayout();
+        float side = dash ? 78 : 92, play = dash ? 82 : 96, gap = dash ? 22 : 26;
+        float need = 2 * side + play + 2 * gap;
+        float k = avail > 0 ? Math.min(1f, avail / (float) dp(need)) : 1f;
+        // and short enough to fit under the title / artist / progress in this card
+        int cardH = mediaCard.getHeight() - mediaCard.getPaddingTop() - mediaCard.getPaddingBottom();
+        if (cardH > 0) k = Math.min(k, Math.max(0.55f, (cardH - dp(dash ? 64 : 150)) / (float) dp(play)));
+        sizeBtn(prevBtn, Math.round(side * k), 0, Math.round(side * k * 0.2f));
+        sizeBtn(nextBtn, Math.round(side * k), 0, Math.round(side * k * 0.2f));
+        sizeBtn(playBtn, Math.round(play * k), Math.round(gap * k), Math.round(play * k * 0.27f));
+    }
+
+    void sizeBtn(View b, int sizeDp, int sideMarginDp, int padDp) {
         LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) b.getLayoutParams();
         lp.width = lp.height = dp(sizeDp);
         if (sideMarginDp > 0) { lp.leftMargin = lp.rightMargin = dp(sideMarginDp); lp.setMarginStart(dp(sideMarginDp)); lp.setMarginEnd(dp(sideMarginDp)); }
         b.setLayoutParams(lp);
+        int p = dp(padDp);
+        b.setPadding(p, p, p, p);
     }
 
     void setLayoutMode(int l) {
@@ -1965,7 +2268,7 @@ public class MainActivity extends Activity {
     class IdleR implements Runnable {
         @Override public void run() {
             if (!resumed || saverOn || camOpen) return;
-            if (drawer.getVisibility() == View.VISIBLE || lastSpeed > 2.8f) { // drawer open / driving: wait
+            if (drawerOpen || lastSpeed > 2.8f) { // drawer open / driving: wait
                 ui.postDelayed(this, 30_000);
                 return;
             }
@@ -2038,8 +2341,15 @@ public class MainActivity extends Activity {
         saverOn = false;
         saver.animate().cancel();
         mainView.setVisibility(View.VISIBLE);
-        saver.stop();
-        saver.setVisibility(View.GONE);
+        if (resumed) {
+            // quick fade back to the dashboard (GPU layer: one texture, no redraws)
+            saver.animate().alpha(0f).setDuration(220).withLayer().withEndAction(() -> {
+                if (!saverOn) { saver.stop(); saver.setVisibility(View.GONE); }
+            }).start();
+        } else {
+            saver.stop();
+            saver.setVisibility(View.GONE);
+        }
         drive.setActive(resumed);
         if (resumed) renderState(); // restart the progress ticker
         updateCamSession();

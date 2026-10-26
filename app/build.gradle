@@ -10,8 +10,8 @@ android {
         applicationId 'xyz.ox1de.cardash'
         minSdk 26
         targetSdk 33
-        versionCode 8
-        versionName '1.7'
+        versionCode 19
+        versionName '2.3'
     }
 
     signingConfigs {

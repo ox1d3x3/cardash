@@ -12,7 +12,7 @@ import android.graphics.drawable.RippleDrawable;
  *  switch is just re-assigning colours: no activity restart, no re-inflation, no flash. */
 final class Look {
     final boolean light;
-    final int bg, card, cardHi, line, text, text2, text3, accent, dock, slot, ripple, drawer, alert, carAuto;
+    final int bg, card, cardHi, line, text, text2, text3, accent, dock, slot, ripple, drawer, alert, carAuto, track;
 
     static final Look DARK = new Look(false);
     static final Look LIGHT = new Look(true);
@@ -24,11 +24,13 @@ final class Look {
             text = 0xFFF2F3F5; text2 = 0xFF8B919A; text3 = 0xFF565B63;
             dock = 0xFF0E0F12; slot = 0xFF16181C; ripple = 0x33FFFFFF; drawer = 0xF507080A;
             alert = 0xFFFF5A5F; carAuto = 0xFFF4F5F7;   // white car on dark
+            track = 0xFF30343B;                          // slider/progress rail: visible on a car screen in sunlight
         } else {
             bg = 0xFFE9ECEF; card = 0xFFFFFFFF; cardHi = 0xFFF1F3F5; line = 0xFFDCE0E5;
             text = 0xFF15181D; text2 = 0xFF5D646E; text3 = 0xFF9298A1;
             dock = 0xFFFFFFFF; slot = 0xFFF0F2F4; ripple = 0x1F000000; drawer = 0xF5E9ECEF;
             alert = 0xFFE0353C; carAuto = 0xFF393D44;   // black car on light (charcoal so the glass stays readable)
+            track = 0xFFCDD2D9;
         }
         accent = 0xFF3E6AE1;
     }
