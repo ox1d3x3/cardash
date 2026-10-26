@@ -268,6 +268,7 @@ public class MainActivity extends Activity {
         applyImmersive();
         drive.setActive(!saverOn);
         updateCamSession(); // Dash cam layout: bring the tile back
+        if (dashLayout()) ui.postDelayed(linkCheck, 5000);
         updateRam();
         ui.postDelayed(ramTick, 15_000);
         ui.postDelayed(homeClean, 1500);   // you just came back home: tidy up after the app you left
@@ -282,6 +283,7 @@ public class MainActivity extends Activity {
         drive.setActive(false);
         hideSaver();
         closeCam(); // leaving home: give the Wi-Fi back
+        ui.removeCallbacks(linkCheck);
         updateCamSession();
         ui.removeCallbacks(ramTick);
         ui.removeCallbacks(homeClean);
@@ -1372,6 +1374,35 @@ public class MainActivity extends Activity {
 
     boolean dashLayout() { return sp.getInt("layout", 0) == 1; }
 
+    static final long WAKE_GRACE = 60_000; // after boot / ignition, give wireless Android Auto the Wi-Fi first
+    long lastWake;
+    boolean camLinkOk;
+
+    /** Why the camera should keep off the Wi-Fi right now (wireless phone link), or null. */
+    String linkBusy() {
+        if (!sp.getBoolean("camAaGuard", true)) return null;
+        String h = PhoneLink.hosted();
+        if (h != null) return "wireless link on " + h;
+        String p = PhoneLink.playing(msm, listenerCn, booster == null ? null : booster.labels);
+        return p == null ? null : labelOf(p) + " is playing";
+    }
+
+    /** While the home screen shows the Dash cam layout, re-check every 5 s (cheap: no I/O). */
+    final Runnable linkCheck = new LinkCheck();
+    class LinkCheck implements Runnable {
+        @Override public void run() {
+            ui.removeCallbacks(this);
+            if (!resumed || !dashLayout()) return;
+            updateCamSession();
+            ui.postDelayed(this, 5000);
+        }
+    }
+
+    final BroadcastReceiver wakeRx = new WakeRx();
+    class WakeRx extends BroadcastReceiver {
+        @Override public void onReceive(Context c, Intent i) { lastWake = SystemClock.elapsedRealtime(); } // ignition on (sleep-mode units)
+    }
+
     int rearMode() { return sp.getInt("rearMode", 1); } // 0 off, 1 head unit camera, 2 an app
 
     void setupCam() {
@@ -1400,6 +1431,7 @@ public class MainActivity extends Activity {
         camBtn.setOnClickListener(v -> openCam());
         drive.setOnClickListener(v -> { if (sp.getBoolean("camTapCar", true)) openCam(); });
         camTile.setOnClickListener(v -> openCam());
+        reg(wakeRx, new IntentFilter(Intent.ACTION_SCREEN_ON));
         camTile.setOnLongClickListener(v -> { showCamSettings(); return true; });
         findViewById(R.id.camClose).setOnClickListener(v -> closeCam());
         camFront.setOnClickListener(v -> switchCam(false));
@@ -1446,6 +1478,18 @@ public class MainActivity extends Activity {
         if (camView == null) return;
         boolean want = resumed && !saverOn && !camHalted
                 && (camOpen ? (!camRearOn || dashLayout()) : dashLayout());
+        if (want && !camOpen) { // home tile: never fight a wireless Android Auto / CarPlay session
+            long sinceWake = SystemClock.elapsedRealtime() - Math.max(0, lastWake);
+            if (sinceWake < WAKE_GRACE) {
+                want = false;
+                setTileStatus("Letting your phone connect first…");
+                ui.removeCallbacks(linkCheck);
+                ui.postDelayed(linkCheck, WAKE_GRACE - sinceWake + 500);
+            } else {
+                String l = linkBusy();
+                if (l != null) { want = false; setTileStatus("Paused while Android Auto / CarPlay is connected · tap to view"); }
+            }
+        }
         if (!want) { stopCam(); return; }
         android.view.Surface full = fullReady ? camSurface.getHolder().getSurface() : null;
         android.view.Surface tile = tileReady && camTile.getVisibility() == View.VISIBLE ? tileSurface.getHolder().getSurface() : null;
@@ -1513,6 +1557,20 @@ public class MainActivity extends Activity {
     void openCam() {
         if (camOpen) return;
         if (!sp.getBoolean("camIntro", false)) { showCamIntro(this::openCam); return; }
+        if (!camLinkOk && cam == null) {
+            final String l = linkBusy();
+            if (l != null) {
+                new AlertDialog.Builder(this, dlg())
+                        .setTitle("Android Auto / CarPlay is connected")
+                        .setMessage("Your phone looks connected wirelessly (" + l + "). The DDPAI needs this head unit's "
+                                + "Wi-Fi too, and on many units sharing it makes Android Auto stutter or drop for as long "
+                                + "as the camera is on screen. It recovers when you close the camera.")
+                        .setPositiveButton("View anyway", (d, w) -> { camLinkOk = true; openCam(); })
+                        .setNegativeButton("Cancel", null)
+                        .show();
+                return;
+            }
+        }
         camOpen = true;
         camRearOn = false;
         camHalted = false;
@@ -1541,6 +1599,7 @@ public class MainActivity extends Activity {
     void closeCam() {
         if (!camOpen) return;
         camOpen = false;
+        camLinkOk = false; // the override was for this viewing only
         camRearOn = false;
         ui.removeCallbacks(hideCamBar);
         stopRear();
@@ -1737,6 +1796,7 @@ public class MainActivity extends Activity {
         mediaCard.requestLayout();
         applyOrientation(getResources().getConfiguration());
         updateCamSession();
+        if (dash && resumed) { ui.removeCallbacks(linkCheck); ui.postDelayed(linkCheck, 5000); }
     }
 
     void sizeBtn(View b, int sizeDp, int sideMarginDp) {
@@ -1841,6 +1901,21 @@ public class MainActivity extends Activity {
                 v -> { sp.edit().putString("camPass", v.trim()).apply(); showCamSettings(); }));
         labels.add("Quality:  " + (smooth ? "Smooth (camera's preview stream)" : "Full resolution"));
         acts.add(() -> { sp.edit().putBoolean("camSmooth", !smooth).apply(); showCamSettings(); });
+        final boolean guard = sp.getBoolean("camAaGuard", true);
+        labels.add("Wireless Android Auto / CarPlay:  " + (guard ? "protect it (camera pauses while connected)" : "camera connects anyway"));
+        acts.add(() -> { sp.edit().putBoolean("camAaGuard", !guard).apply(); showCamSettings(); });
+        final String hostedNow = PhoneLink.hosted();
+        labels.add("Phone link right now:  " + (hostedNow != null ? "detected (" + hostedNow + ")" : "not detected"));
+        acts.add(() -> new AlertDialog.Builder(this, dlg())
+                .setTitle("Phone link detection")
+                .setMessage("Wireless Android Auto and CarPlay run over a Wi-Fi network this head unit hosts for your phone. "
+                        + "CarDash looks for that network (and for a phone-link app playing audio) and keeps the dash cam off "
+                        + "the Wi-Fi while it's there.\n\nRight now: " + (hostedNow != null ? hostedNow : "nothing hosted")
+                        + "\nWi-Fi chip: " + PhoneLink.concurrency(getSystemService(android.net.wifi.WifiManager.class))
+                        + "\n\nIf this says \"detected\" even with your phone disconnected, your phone-link app keeps its "
+                        + "network up all the time. Then set the option above to \"connect anyway\" and test whether Android Auto stays smooth.")
+                .setPositiveButton("OK", (d, w) -> showCamSettings())
+                .show());
         labels.add("Tap the car to open:  " + (tapCar ? "on" : "off"));
         acts.add(() -> { sp.edit().putBoolean("camTapCar", !tapCar).apply(); showCamSettings(); });
         labels.add("Last connection log…" + (model.isEmpty() ? "" : "   (last camera: " + model + ")"));

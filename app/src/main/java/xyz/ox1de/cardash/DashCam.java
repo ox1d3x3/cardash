@@ -119,7 +119,9 @@ final class DashCam {
 
     void work() {
         log("CarDash dash cam, Android " + Build.VERSION.RELEASE + ", " + Build.MANUFACTURER + " " + Build.MODEL);
-        log("keeps other Wi-Fi while on camera: " + (staConcurrency(wm) ? "yes" : "no / unknown"));
+        log("Wi-Fi chip: " + PhoneLink.concurrency(wm));
+        String link = PhoneLink.hosted();
+        log("phone link (wireless AA/CarPlay): " + (link == null ? "not detected" : link));
         status("Looking for the dash cam…");
         Network n = findReachable();
         if (n == null && !stopped) {

@@ -33,6 +33,31 @@ final class Policy {
             "carplay", "car play", "airplay", "android auto", "link", "mirror", "projection", "easyconn",
             "easy conn", "autokit", "speedplay", "carlife", "hicar", "互联", "投屏"};
 
+    /** Apps that carry a phone projection session (wireless Android Auto / CarPlay receivers). */
+    static final String[] PHONE_LINK = {"link", "carplay", "airplay", "androidauto", "android auto", "gearhead",
+            "projection", "mirror", "easyconn", "carbit", "autokit", "speedplay", "carlife", "hicar", "\u4e92\u8054", "\u6295\u5c4f"};
+
+    static boolean phoneLink(String pkg, String label) {
+        String p = pkg == null ? "" : pkg.toLowerCase(Locale.US), l = label == null ? "" : label.toLowerCase(Locale.US);
+        for (String k : PHONE_LINK) if (p.contains(k) || l.contains(k)) return true;
+        return false;
+    }
+
+    /**
+     * True for a network interface where the head unit itself *hosts* Wi-Fi for a phone: a hotspot
+     * or Wi-Fi Direct group owner (that is how wireless Android Auto / CarPlay connect), recognised
+     * by the interface name and by holding the gateway address (x.x.x.1) of a private subnet.
+     */
+    static boolean hostedNetwork(String iface, byte[] ipv4) {
+        if (iface == null || ipv4 == null || ipv4.length != 4) return false;
+        String n = iface.toLowerCase(Locale.US);
+        boolean name = n.startsWith("p2p") || n.startsWith("ap") || n.startsWith("swlan") || n.startsWith("softap")
+                || n.startsWith("uap") || n.matches("wlan[1-9]\\d*");
+        int a = ipv4[0] & 0xFF, b = ipv4[1] & 0xFF, d = ipv4[3] & 0xFF;
+        boolean priv = a == 10 || (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168);
+        return name && priv && d == 1;
+    }
+
     static boolean hard(String pkg) {
         for (String h : HARD) if (h.equals(pkg)) return true;
         return false;

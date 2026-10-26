@@ -101,9 +101,20 @@ Rear camera* lists what the unit exposes; camera permission is asked the first t
 own reverse screen is holding the camera, CarDash says so. Units that don't share the camera can use
 "Open the head unit's camera app instead".
 
+**Wireless Android Auto / CarPlay**: these run over a Wi-Fi network the head unit hosts for the
+phone (hotspot or Wi-Fi Direct, usually 5 GHz). The DDPAI is a 2.4 GHz network the same Wi-Fi chip
+must join as well; chips that can't do both bands at once time-share the radio, so Android Auto can
+stutter or drop. So by default CarDash protects it:
+- the home tile pauses whenever a hosted phone link is up (or a phone-link app is playing), and
+  waits 60 s after boot / ignition so your phone connects first;
+- the full-screen view asks "View anyway?" while a link is up; the override lasts for that viewing only.
+*Settings → Dash cam* shows whether a link is detected right now and what the Wi-Fi chip reports.
+If your phone-link app keeps its network up even with no phone, set it to "connect anyway" and test.
+Wired Android Auto and the wired rear camera are never affected.
+
 Things to know:
-- While the view is open, the head unit is on the camera's Wi-Fi, so a phone-hotspot internet
-  connection pauses, and wireless CarPlay may drop on some units. Close the view and it all returns.
+- While the camera is on screen, the head unit is on the camera's Wi-Fi, so a phone-hotspot internet
+  connection may pause on units that can't do two networks at once. Close the view and it returns.
 - The camera serves one app at a time: disconnect your phone's DDPAI app from it first.
 - Tested here against real RTSP servers (Digest/Basic auth, 480p / 1080p / 1440p, 25 s+ runs, keep-alive)
   and a mock DDPAI API, but not yet on a Mini Pro 2K. If it doesn't play, the log says exactly where it stopped.
