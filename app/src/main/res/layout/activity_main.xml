@@ -2,10 +2,11 @@
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/root"
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:background="@color/bg">
+    android:layout_height="match_parent">
+    <!-- no background here: the window background is the only full-screen fill (less overdraw) -->
 
     <LinearLayout
+        android:id="@+id/main"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical">
@@ -47,6 +48,21 @@
                         android:textColor="@color/text3"
                         android:textSize="11sp" />
 
+                    <!-- fixed width: updating the % never re-lays-out the panel -->
+                    <TextView
+                        android:id="@+id/ram"
+                        android:layout_width="78dp"
+                        android:layout_height="28dp"
+                        android:layout_marginEnd="6dp"
+                        android:background="@drawable/ripple_rect"
+                        android:gravity="center_vertical|end"
+                        android:letterSpacing="0.12"
+                        android:paddingEnd="6dp"
+                        android:singleLine="true"
+                        android:text="RAM"
+                        android:textColor="@color/text3"
+                        android:textSize="11sp" />
+
                     <ImageView
                         android:id="@+id/wifi"
                         android:layout_width="18dp"
@@ -56,31 +72,33 @@
                         android:tint="@color/text2" />
                 </LinearLayout>
 
+                <!-- Fixed-width children: a speed update only redraws the digits, never re-lays-out the screen -->
                 <LinearLayout
                     android:id="@+id/speedBox"
-                    android:layout_width="wrap_content"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:background="@drawable/ripple_rect"
-                    android:baselineAligned="true"
-                    android:orientation="horizontal">
+                    android:orientation="vertical">
 
                     <TextView
                         android:id="@+id/speed"
-                        android:layout_width="wrap_content"
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:fontFamily="sans-serif-light"
                         android:includeFontPadding="false"
+                        android:singleLine="true"
                         android:text="--"
                         android:textColor="@color/text"
                         android:textSize="72sp" />
 
                     <TextView
                         android:id="@+id/unit"
-                        android:layout_width="wrap_content"
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
+                        android:layout_marginStart="4dp"
                         android:fontFamily="sans-serif-medium"
                         android:letterSpacing="0.1"
+                        android:singleLine="true"
                         android:text="KM/H"
                         android:textColor="@color/text2"
                         android:textSize="13sp" />
@@ -88,7 +106,9 @@
 
                 <TextView
                     android:id="@+id/heading"
-                    android:layout_width="wrap_content"
+                    android:layout_width="match_parent"
+                    android:layout_marginTop="6dp"
+                    android:singleLine="true"
                     android:layout_height="wrap_content"
                     android:fontFamily="sans-serif-medium"
                     android:letterSpacing="0.15"
@@ -275,6 +295,7 @@
                     android:orientation="horizontal">
 
                     <LinearLayout
+                        android:id="@+id/volCard"
                         android:layout_width="0dp"
                         android:layout_height="match_parent"
                         android:layout_weight="1"
@@ -357,12 +378,18 @@
             android:layout_height="match_parent"
             android:clipToPadding="false"
             android:columnWidth="108dp"
-            android:fadingEdgeLength="24dp"
             android:numColumns="auto_fit"
             android:padding="24dp"
-            android:requiresFadingEdge="vertical"
+            android:scrollingCache="false"
             android:scrollbars="none"
             android:stretchMode="spacingWidthUniform"
             android:verticalSpacing="10dp" />
     </FrameLayout>
+
+    <!-- ============ SCREENSAVER ============ -->
+    <xyz.ox1de.cardash.ClockView
+        android:id="@+id/saver"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
 </FrameLayout>

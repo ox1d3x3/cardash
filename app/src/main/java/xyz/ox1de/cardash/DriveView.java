@@ -50,7 +50,7 @@ public class DriveView extends View {
     // motion state
     float target, shown, offset;
     float moveT, brakeT;
-    boolean everMoved, night, active;
+    boolean everMoved, night, active, light;
     long brakeUntil, lastFrame, lastSpeedAt;
     float lastMs;
 
@@ -93,6 +93,15 @@ public class DriveView extends View {
         kick();
     }
 
+    /** Light theme: dark lane paint and a softer shadow. */
+    public void setLight(boolean l) {
+        if (l == light) return;
+        light = l;
+        buildShaders();
+        rebuildCar();
+        invalidate();
+    }
+
     public void setNight(boolean n) {
         if (n == night) return;
         night = n;
@@ -127,11 +136,7 @@ public class DriveView extends View {
         dash = 70 * s;
         period = 170 * s;
 
-        int faint = 0x00FFFFFF, solid = 0xFFFFFFFF;
-        Shader fade = new LinearGradient(0, 0, 0, h,
-                new int[]{faint, solid, solid, faint}, new float[]{0f, 0.2f, 0.8f, 1f}, Shader.TileMode.CLAMP);
-        lane.setShader(fade);
-        edge.setShader(fade);
+        buildShaders();
 
         // headlight beams: from the lamps (artwork 45,29 and 155,29) up to the top edge
         float hy = carT + 22 * s, top = Math.max(0, hy - 300 * s);
@@ -155,6 +160,17 @@ public class DriveView extends View {
         rebuildCar();
     }
 
+    void buildShaders() {
+        int h = getHeight();
+        if (h == 0) return;
+        int rgb = light ? 0x000000 : 0xFFFFFF;
+        int faint = rgb, solid = 0xFF000000 | rgb;
+        Shader fade = new LinearGradient(0, 0, 0, h,
+                new int[]{faint, solid, solid, faint}, new float[]{0f, 0.2f, 0.8f, 1f}, Shader.TileMode.CLAMP);
+        lane.setShader(fade);
+        edge.setShader(fade);
+    }
+
     void rebuildCar() {
         if (s <= 0) return;
         int cw = Math.round(VW * s), ch = Math.round(VH * s);
@@ -165,7 +181,7 @@ public class DriveView extends View {
 
         // soft ground shadow (software canvas: blur is fine, it runs once)
         Paint sh = new Paint(Paint.ANTI_ALIAS_FLAG);
-        sh.setColor(0xB0000000);
+        sh.setColor(light ? 0x48000000 : 0xB0000000);
         sh.setMaskFilter(new BlurMaskFilter(9 * s, BlurMaskFilter.Blur.NORMAL));
         c.drawRoundRect(new RectF(20 * s, 12 * s, 180 * s, 388 * s), 40 * s, 40 * s, sh);
 
@@ -229,19 +245,22 @@ public class DriveView extends View {
 
     @Override
     protected void onDraw(Canvas c) {
-        long now = SystemClock.uptimeMillis();
+        // vsync timestamp of this frame (same clock as uptimeMillis): evenly spaced, so motion
+        // stays smooth even when a draw happens to start a little late
+        long now = getDrawingTime();
         float dt = lastFrame == 0 ? 0f : Math.min(0.05f, (now - lastFrame) / 1000f);
         boolean more = step(dt, now);
 
         int h = getHeight();
 
         // road edges (static) and lane dashes (scrolling toward the rear)
-        int a = (int) (26 + 34 * moveT);
+        float k = light ? 0.55f : 1f;
+        int a = (int) ((26 + 34 * moveT) * k);
         edge.setAlpha(a);
         if (edgeX1 > 0) c.drawRect(edgeX1 - laneW / 2, 0, edgeX1 + laneW / 2, h, edge);
         if (edgeX2 < getWidth()) c.drawRect(edgeX2 - laneW / 2, 0, edgeX2 + laneW / 2, h, edge);
 
-        lane.setAlpha((int) (60 + 110 * moveT));
+        lane.setAlpha((int) ((60 + 110 * moveT) * k));
         for (float y = offset - period; y < h; y += period) {
             c.drawRect(laneX1 - laneW / 2, y, laneX1 + laneW / 2, y + dash, lane);
             c.drawRect(laneX2 - laneW / 2, y, laneX2 + laneW / 2, y + dash, lane);

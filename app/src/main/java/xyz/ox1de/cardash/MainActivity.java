@@ -2,6 +2,7 @@ package xyz.ox1de.cardash;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.AlertDialog;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
@@ -12,9 +13,11 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.location.Location;
 import android.location.LocationListener;
@@ -39,6 +42,7 @@ import android.text.format.DateFormat;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -75,8 +79,10 @@ public class MainActivity extends Activity {
     static final String AIMP = "com.aimp.player";
     static final int SLOTS = 6;
 
-    static final String[] CAR_COLOR_NAMES = {"White", "Silver", "Grey", "Black", "Red", "Blue", "Beige"};
-    static final int[] CAR_COLORS = {0xFFF4F5F7, 0xFFC4C8CE, 0xFF70757D, 0xFF2C2F35, 0xFFC2242C, 0xFF2E5BB8, 0xFFCBB896};
+    // index 0 = Auto: white car on the dark theme, black car on the light theme
+    static final String[] CAR_COLOR_NAMES = {"Auto (white at night, black by day)", "White", "Silver", "Grey", "Black", "Red", "Blue", "Beige"};
+    static final int[] CAR_COLORS = {0, 0xFFF4F5F7, 0xFFC4C8CE, 0xFF70757D, 0xFF2C2F35, 0xFFC2242C, 0xFF2E5BB8, 0xFFCBB896};
+    static final String[] THEME_NAMES = {"Auto: light 5 am – 6 pm", "Auto: real sunrise / sunset (GPS)", "Always dark", "Always light"};
     static final int[] ALERTS = {0, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130};
 
     final Handler ui = new Handler(Looper.getMainLooper());
@@ -100,6 +106,16 @@ public class MainActivity extends Activity {
     FrameLayout drawer;
     GridView grid;
     DriveView drive;
+    View volCard, settingsBtn, speedBox, mediaCard, prevBtn, nextBtn;
+    Look look;
+    Booster booster;
+    TextView ramTv;
+    ClockView saver;
+    View mainView;
+    boolean saverOn, swallowTouch;
+    boolean lastPlaying, lastMuteIcon, iconsInit;
+    SimpleDateFormat clockFmt, dateFmt;
+    String clockKey;
 
     final List<AppEntry> apps = new ArrayList<>();
     final Map<String, AppEntry> byPkg = new HashMap<>();
@@ -118,6 +134,7 @@ public class MainActivity extends Activity {
     static class AppEntry {
         String pkg, label;
         Bitmap icon;
+        boolean sys;
     }
 
     // ------------------------------------------------------------------ lifecycle
@@ -134,7 +151,7 @@ public class MainActivity extends Activity {
         msm = getSystemService(MediaSessionManager.class);
         cm = getSystemService(ConnectivityManager.class);
         listenerCn = new ComponentName(this, MediaListener.class);
-        iconPx = dp(48);
+        iconPx = dp(52); // exactly the drawer icon size: no per-frame bitmap scaling
 
         speedTv = findViewById(R.id.speed);
         unitTv = findViewById(R.id.unit);
@@ -161,7 +178,21 @@ public class MainActivity extends Activity {
         drawer = findViewById(R.id.drawer);
         grid = findViewById(R.id.grid);
         drive = findViewById(R.id.car);
-        drive.setCarColor(sp.getInt("carColor", CAR_COLORS[0]));
+        volCard = findViewById(R.id.volCard);
+        settingsBtn = findViewById(R.id.settings);
+        speedBox = findViewById(R.id.speedBox);
+        mediaCard = findViewById(R.id.media);
+        prevBtn = findViewById(R.id.prev);
+        nextBtn = findViewById(R.id.next);
+        ramTv = findViewById(R.id.ram);
+        saver = findViewById(R.id.saver);
+        mainView = findViewById(R.id.main);
+        refreshTheme(true); // before the first frame, so there is never a wrong-theme flash
+        booster = new Booster(this, sp, ui, listenerCn, new BoostL());
+        ramTv.setOnClickListener(v -> manualClean());
+        ramTv.setOnLongClickListener(v -> { showOptimizer(); return true; });
+        clockTv.setOnLongClickListener(v -> { showSaver(); return true; });
+        ui.postDelayed(bootClean, 30_000); // after boot, once the head unit's own services have started
         speedTv.setFontFeatureSettings("tnum"); // fixed-width digits: no jitter as speed changes
 
         artIv.setClipToOutline(true);
@@ -226,7 +257,12 @@ public class MainActivity extends Activity {
         startLocation();
         connectMedia();
         applyImmersive();
-        drive.setActive(true);
+        drive.setActive(!saverOn);
+        updateRam();
+        ui.postDelayed(ramTick, 15_000);
+        ui.postDelayed(homeClean, 1500);   // you just came back home: tidy up after the app you left
+        ui.postDelayed(periodicClean, 3 * 60_000);
+        resetIdle();
     }
 
     @Override
@@ -234,6 +270,11 @@ public class MainActivity extends Activity {
         super.onPause();
         resumed = false;
         drive.setActive(false);
+        hideSaver();
+        ui.removeCallbacks(ramTick);
+        ui.removeCallbacks(homeClean);
+        ui.removeCallbacks(periodicClean);
+        ui.removeCallbacks(idleR);
         // Do nothing while another app (maps, player) is in front: saves CPU + RAM on 2GB units.
         stopLocation();
         disconnectMedia();
@@ -256,6 +297,7 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent i) {
         super.onNewIntent(i);
         hideDrawer(); // Home pressed while we're already on top
+        hideSaver();
     }
 
     @Override
@@ -317,10 +359,12 @@ public class MainActivity extends Activity {
                 c.show(WindowInsets.Type.systemBars());
             }
         } else {
-            w.getDecorView().setSystemUiVisibility(on
+            int lightBars = look != null && look.light
+                    ? View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR : 0;
+            w.getDecorView().setSystemUiVisibility(lightBars | (on
                     ? View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_FULLSCREEN
                     | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                    : 0);
+                    : 0));
         }
     }
 
@@ -383,13 +427,16 @@ public class MainActivity extends Activity {
 
     void updateClock() {
         Date d = new Date();
-        String pattern = DateFormat.is24HourFormat(this) ? "HH:mm" : "h:mm";
-        setT(clockTv, new SimpleDateFormat(pattern, Locale.getDefault()).format(d));
-        String dp = DateFormat.getBestDateTimePattern(Locale.getDefault(), "EEEEdMMMM");
-        setT(dateTv, new SimpleDateFormat(dp, Locale.getDefault()).format(d));
-        java.util.Calendar cal = java.util.Calendar.getInstance();
-        int min = cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cal.get(java.util.Calendar.MINUTE);
-        drive.setNight(min >= 18 * 60 + 30 || min < 6 * 60); // headlight beams + tail-lamp glow
+        boolean h24 = DateFormat.is24HourFormat(this);
+        String key = h24 + Locale.getDefault().toString();
+        if (!key.equals(clockKey)) { // formatters are cached; rebuilt only if locale / 24h setting changes
+            clockKey = key;
+            clockFmt = new SimpleDateFormat(h24 ? "HH:mm" : "h:mm", Locale.getDefault());
+            dateFmt = new SimpleDateFormat(DateFormat.getBestDateTimePattern(Locale.getDefault(), "EEEEdMMMM"), Locale.getDefault());
+        }
+        setT(clockTv, clockFmt.format(d));
+        setT(dateTv, dateFmt.format(d));
+        refreshTheme(false);
     }
 
     // ------------------------------------------------------------------ speed (GPS)
@@ -444,16 +491,31 @@ public class MainActivity extends Activity {
         renderSpeed(s);
         setT(gpsTv, l.hasAccuracy() ? "GPS · ±" + Math.round(l.getAccuracy()) + " M" : "GPS · LOCKED");
         if (l.hasBearing() && s > 1.5f) setT(headingTv, "HEADING " + compass(l.getBearing()));
+        rememberPlace(l);
+    }
+
+    void rememberPlace(Location l) {
+        float lat = sp.getFloat("lat", 999f), lon = sp.getFloat("lon", 999f);
+        if (Math.abs(lat - l.getLatitude()) + Math.abs(lon - l.getLongitude()) > 0.5) {
+            sp.edit().putFloat("lat", (float) l.getLatitude()).putFloat("lon", (float) l.getLongitude()).apply();
+            sunDay = -1; // recompute
+        }
     }
 
     void renderSpeed(float ms) {
         lastSpeed = ms;
         drive.setSpeed(ms);
-        if (ms < 0) { setT(speedTv, "--"); speedTv.setTextColor(getColor(R.color.text)); return; }
+        if (ms < 0) {
+            setT(speedTv, "--");
+            speedTv.setTextColor(look.text);
+            if (saverOn) saver.setSpeed("");
+            return;
+        }
         int v = Math.round(ms * (mph() ? 2.23694f : 3.6f));
         setT(speedTv, Integer.toString(v));
+        if (saverOn) saver.setSpeed(v >= 5 ? v + (mph() ? " MPH" : " KM/H") : "");
         int alert = sp.getInt("alert", 0);
-        int col = alert > 0 && v > alert ? 0xFFFF5A5F : getColor(R.color.text);
+        int col = alert > 0 && v > alert ? look.alert : look.text;
         if (speedTv.getCurrentTextColor() != col) speedTv.setTextColor(col);
     }
 
@@ -490,8 +552,7 @@ public class MainActivity extends Activity {
     final Runnable ticker = new Ticker();
     class Ticker implements Runnable {
         @Override public void run() {
-            updateProgress();
-            ui.postDelayed(this, 1000);
+            ui.postDelayed(this, updateProgress());
         }
     };
 
@@ -577,6 +638,7 @@ public class MainActivity extends Activity {
         if (b == null) b = m.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON);
         setArt(b);
         duration = m.getLong(MediaMetadata.METADATA_KEY_DURATION);
+        if (saverOn) saver.setNowPlaying(nowPlayingLine());
     }
 
     static String first(MediaMetadata m, String... keys) {
@@ -592,7 +654,9 @@ public class MainActivity extends Activity {
         artBmp = b;
         if (b == null) {
             artIv.setScaleType(ImageView.ScaleType.CENTER);
-            artIv.setImageResource(R.drawable.ic_music);
+            Drawable ph = getDrawable(R.drawable.ic_music).mutate();
+            ph.setTint(look.text3);
+            artIv.setImageDrawable(ph);
         } else {
             artIv.setScaleType(ImageView.ScaleType.CENTER_CROP);
             artIv.setImageBitmap(b);
@@ -601,19 +665,23 @@ public class MainActivity extends Activity {
 
     void renderState() {
         boolean p = ctl != null && isPlaying(ctl);
-        playBtn.setImageResource(p ? R.drawable.ic_pause : R.drawable.ic_play);
-        updateProgress();
+        if (p != lastPlaying || !iconsInit) {
+            lastPlaying = p;
+            playBtn.setImageResource(p ? R.drawable.ic_pause : R.drawable.ic_play);
+        }
+        long next = updateProgress();
         ui.removeCallbacks(ticker);
-        if (p && resumed) ui.postDelayed(ticker, 1000);
+        if (p && resumed && !saverOn) ui.postDelayed(ticker, next);
     }
 
-    void updateProgress() {
+    /** @return ms until the position next crosses a whole second, so the counter never skips. */
+    long updateProgress() {
         PlaybackState s = ctl == null ? null : ctl.getPlaybackState();
         if (s == null || duration <= 0) {
             prog.setProgress(0);
             setT(posTv, "");
             setT(durTv, duration > 0 ? fmt(duration) : "");
-            return;
+            return 1000;
         }
         long pos = s.getPosition();
         if (s.getState() == PlaybackState.STATE_PLAYING && s.getLastPositionUpdateTime() > 0) {
@@ -623,13 +691,28 @@ public class MainActivity extends Activity {
         prog.setProgress((int) (pos * 1000 / duration));
         setT(posTv, fmt(pos));
         setT(durTv, fmt(duration));
+        float speed = Math.max(0.25f, Math.abs(s.getPlaybackSpeed()));
+        return Math.max(50, (long) ((1000 - pos % 1000) / speed) + 20);
     }
 
+    /** m:ss or h:mm:ss without String.format (which allocates a Formatter + parses a pattern every call). */
     static String fmt(long ms) {
         long s = ms / 1000;
-        return s >= 3600
-                ? String.format(Locale.US, "%d:%02d:%02d", s / 3600, (s / 60) % 60, s % 60)
-                : String.format(Locale.US, "%d:%02d", s / 60, s % 60);
+        StringBuilder b = new StringBuilder(8);
+        if (s >= 3600) {
+            b.append(s / 3600).append(':');
+            two(b, (s / 60) % 60);
+        } else {
+            b.append(s / 60);
+        }
+        b.append(':');
+        two(b, s % 60);
+        return b.toString();
+    }
+
+    static void two(StringBuilder b, long v) {
+        if (v < 10) b.append('0');
+        b.append(v);
     }
 
     void playPause() {
@@ -662,6 +745,7 @@ public class MainActivity extends Activity {
     void openPlayer() {
         if (needAccess) { openListenerSettings(); return; }
         if (ctl != null) {
+            booster.noteLaunch(ctl.getPackageName());
             PendingIntent pi = ctl.getSessionActivity();
             if (pi != null) {
                 try { pi.send(); return; } catch (Exception ignored) { }
@@ -700,7 +784,7 @@ public class MainActivity extends Activity {
         }
         if (tryStart(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))) return;
         // Some head units hide this screen entirely: give the adb fallback.
-        new AlertDialog.Builder(this, R.style.Dialog)
+        new AlertDialog.Builder(this, dlg())
                 .setTitle("Media access")
                 .setMessage("This head unit hides the notification-access screen. Grant it once over adb:\n\n"
                         + "adb shell cmd notification allow_listener " + listenerCn.flattenToString())
@@ -715,7 +799,12 @@ public class MainActivity extends Activity {
         boolean muted = am.isStreamMute(AudioManager.STREAM_MUSIC);
         if (!draggingVol) volBar.setProgress(v);
         setT(volTxt, muted ? "" : String.valueOf(v));
-        muteBtn.setImageResource(muted || v == 0 ? R.drawable.ic_volume_off : R.drawable.ic_volume);
+        boolean off = muted || v == 0;
+        if (off != lastMuteIcon || !iconsInit) {
+            lastMuteIcon = off;
+            muteBtn.setImageResource(off ? R.drawable.ic_volume_off : R.drawable.ic_volume);
+        }
+        iconsInit = true;
     }
 
     // ------------------------------------------------------------------ apps
@@ -740,6 +829,7 @@ public class MainActivity extends Activity {
                 AppEntry e = new AppEntry();
                 e.pkg = pkg;
                 e.label = String.valueOf(ri.loadLabel(pm));
+                e.sys = (ri.activityInfo.applicationInfo.flags & android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0;
                 try { e.icon = toBitmap(ri.loadIcon(pm)); } catch (Exception ignored) { }
                 out.add(e);
             }
@@ -788,6 +878,7 @@ public class MainActivity extends Activity {
         Intent i = pm.getLaunchIntentForPackage(pkg);
         if (i == null) { toast("App not found"); return; }
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+        booster.noteLaunch(pkg);
         startSafe(i);
     }
 
@@ -799,7 +890,7 @@ public class MainActivity extends Activity {
         if (!appsLoaded) loadApps(null);
         drawer.setAlpha(0f);
         drawer.setVisibility(View.VISIBLE);
-        drawer.animate().alpha(1f).setDuration(140).start();
+        drawer.animate().alpha(1f).setDuration(140).withLayer().start();
     }
 
     void hideDrawer() {
@@ -820,12 +911,11 @@ public class MainActivity extends Activity {
                 l.setOrientation(LinearLayout.VERTICAL);
                 l.setGravity(Gravity.CENTER_HORIZONTAL);
                 l.setPadding(dp(4), dp(10), dp(4), dp(10));
-                l.setBackgroundResource(R.drawable.ripple_rect);
+                l.setTag(null);
                 ImageView iv = new ImageView(MainActivity.this);
                 l.addView(iv, new LinearLayout.LayoutParams(dp(52), dp(52)));
                 TextView tv = new TextView(MainActivity.this);
                 tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-                tv.setTextColor(getColor(R.color.text2));
                 tv.setSingleLine(true);
                 tv.setEllipsize(TextUtils.TruncateAt.END);
                 tv.setGravity(Gravity.CENTER);
@@ -837,6 +927,11 @@ public class MainActivity extends Activity {
             }
             AppEntry e = apps.get(p);
             LinearLayout l = (LinearLayout) v;
+            if (l.getTag() != look) { // recycled view from the other theme
+                l.setTag(look);
+                l.setBackground(look.rippleRect(dp(16)));
+                ((TextView) l.getChildAt(1)).setTextColor(look.text2);
+            }
             ((ImageView) l.getChildAt(0)).setImageBitmap(e.icon);
             ((TextView) l.getChildAt(1)).setText(e.label);
             return v;
@@ -898,7 +993,7 @@ public class MainActivity extends Activity {
         }
         ImageButton all = dockButton();
         all.setImageResource(R.drawable.ic_apps);
-        all.setColorFilter(getColor(R.color.text2));
+        all.setColorFilter(look.text2);
         all.setPadding(dp(15), dp(15), dp(15), dp(15));
         all.setOnClickListener(v -> showDrawer());
         dock.addView(all);
@@ -906,7 +1001,7 @@ public class MainActivity extends Activity {
 
     ImageButton dockButton() {
         ImageButton b = new ImageButton(this);
-        b.setBackgroundResource(R.drawable.bg_slot);
+        b.setBackground(look.slot(dp(16)));
         b.setScaleType(ImageView.ScaleType.FIT_CENTER);
         b.setPadding(dp(9), dp(9), dp(9), dp(9));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(56), dp(56));
@@ -964,11 +1059,11 @@ public class MainActivity extends Activity {
                 TextView tv = (TextView) l.getChildAt(1);
                 tv.setText(e.label);
                 boolean sel = e.pkg != null && e.pkg.equals(current);
-                tv.setTextColor(getColor(sel ? R.color.accent : R.color.text));
+                tv.setTextColor(sel ? look.accent : look.text);
                 return v;
             }
         };
-        new AlertDialog.Builder(this, R.style.Dialog)
+        new AlertDialog.Builder(this, dlg())
                 .setTitle(title)
                 .setAdapter(ad, (d, w) -> done.accept(list.get(w).pkg))
                 .setNegativeButton("Cancel", null)
@@ -980,67 +1075,444 @@ public class MainActivity extends Activity {
         final boolean locOk = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
         final int alert = sp.getInt("alert", 0);
         final String unit = mph() ? "mph" : "km/h";
-        String[] items = {
-                "Music player:  " + playerLabel(),
-                "Car colour:  " + CAR_COLOR_NAMES[carColorIndex()],
-                "Speed units:  " + unit,
-                "Speed alert:  " + (alert == 0 ? "off" : alert + " " + unit),
-                "Media access:  " + (listenerOk() ? "granted" : "tap to grant"),
-                "Location (speed):  " + (locOk ? "granted" : "tap to grant"),
-                "Hide status/nav bars:  " + (imm ? "on" : "off"),
-                "Set CarDash as Home app",
-                "Reset dock to defaults",
-                "Android settings",
-        };
-        new AlertDialog.Builder(this, R.style.Dialog)
+        final int saverMin = saverMinutes();
+        final List<String> labels = new ArrayList<>();
+        final List<Runnable> acts = new ArrayList<>();
+        labels.add("Music player:  " + playerLabel());                           acts.add(this::pickPlayer);
+        labels.add("Theme:  " + THEME_NAMES[themeMode()]);                       acts.add(this::pickTheme);
+        labels.add("Car colour:  " + CAR_COLOR_NAMES[carColorIndex()]);          acts.add(this::pickCarColor);
+        labels.add("Speed units:  " + unit);                                     acts.add(this::toggleUnits);
+        labels.add("Speed alert:  " + (alert == 0 ? "off" : alert + " " + unit)); acts.add(this::pickAlert);
+        labels.add("Screensaver:  " + (saverMin == 0 ? "off" : "after " + saverMin + " min idle")); acts.add(this::pickSaver);
+        labels.add("RAM optimiser…");                                            acts.add(this::showOptimizer);
+        labels.add("Media access:  " + (listenerOk() ? "granted" : "tap to grant")); acts.add(this::openListenerSettings);
+        labels.add("Location (speed):  " + (locOk ? "granted" : "tap to grant"));
+        acts.add(() -> {
+            if (locOk) openAppInfo(getPackageName());
+            else requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION}, 1);
+        });
+        labels.add("Hide status/nav bars:  " + (imm ? "on" : "off"));
+        acts.add(() -> { sp.edit().putBoolean("immersive", !imm).apply(); applyImmersive(); });
+        labels.add("Set CarDash as Home app");
+        acts.add(() -> { if (!tryStart(new Intent(Settings.ACTION_HOME_SETTINGS))) startSafe(new Intent(Settings.ACTION_SETTINGS)); });
+        labels.add("Reset dock to defaults");
+        acts.add(() -> {
+            SharedPreferences.Editor ed = sp.edit().remove("dockInit");
+            for (int i = 0; i < SLOTS; i++) ed.remove("dock" + i);
+            ed.apply();
+            buildDock();
+        });
+        labels.add("Android settings");                                          acts.add(() -> startSafe(new Intent(Settings.ACTION_SETTINGS)));
+        new AlertDialog.Builder(this, dlg())
                 .setTitle("CarDash")
-                .setItems(items, (d, w) -> {
-                    switch (w) {
-                        case 0: pickPlayer(); break;
-                        case 1: pickCarColor(); break;
-                        case 2: toggleUnits(); break;
-                        case 3: pickAlert(); break;
-                        case 4: openListenerSettings(); break;
-                        case 5:
-                            if (locOk) openAppInfo(getPackageName());
-                            else requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION,
-                                    Manifest.permission.ACCESS_COARSE_LOCATION}, 1);
-                            break;
-                        case 6:
-                            sp.edit().putBoolean("immersive", !imm).apply();
-                            applyImmersive();
-                            break;
-                        case 7:
-                            if (!tryStart(new Intent(Settings.ACTION_HOME_SETTINGS)))
-                                startSafe(new Intent(Settings.ACTION_SETTINGS));
-                            break;
-                        case 8: {
-                            SharedPreferences.Editor ed = sp.edit().remove("dockInit");
-                            for (int i = 0; i < SLOTS; i++) ed.remove("dock" + i);
-                            ed.apply();
-                            buildDock();
-                            break;
-                        }
-                        case 9: startSafe(new Intent(Settings.ACTION_SETTINGS)); break;
-                    }
-                })
+                .setItems(labels.toArray(new String[0]), (d, w) -> acts.get(w).run())
                 .show();
     }
 
     int carColorIndex() {
-        int c = sp.getInt("carColor", CAR_COLORS[0]);
+        int c = sp.getInt("carColor", 0);
         for (int i = 0; i < CAR_COLORS.length; i++) if (CAR_COLORS[i] == c) return i;
         return 0;
     }
 
     void pickCarColor() {
-        new AlertDialog.Builder(this, R.style.Dialog)
+        new AlertDialog.Builder(this, dlg())
                 .setTitle("Car colour")
                 .setSingleChoiceItems(CAR_COLOR_NAMES, carColorIndex(), (d, w) -> {
                     sp.edit().putInt("carColor", CAR_COLORS[w]).apply();
-                    drive.setCarColor(CAR_COLORS[w]);
+                    drive.setCarColor(carColor());
                     d.dismiss();
                 })
+                .show();
+    }
+
+    // ------------------------------------------------------------------ theme
+
+    int sunDay = -1;
+    int[] sun; // {sunriseMin, sunsetMin} for sunDay
+
+    int themeMode() { return sp.getInt("theme", 0); }
+
+    int carColor() {
+        int c = sp.getInt("carColor", 0);
+        return c == 0 ? look.carAuto : c;
+    }
+
+    int dlg() { return look != null && look.light ? R.style.DialogLight : R.style.Dialog; }
+
+    /** Night = 6 pm to 5 am, or real sunset to sunrise when that mode is on and a location is known. */
+    boolean isNight() {
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        int min = cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cal.get(java.util.Calendar.MINUTE);
+        int rise = 5 * 60, set = 18 * 60;
+        if (themeMode() == 1) {
+            float lat = sp.getFloat("lat", 999f), lon = sp.getFloat("lon", 999f);
+            if (lat == 999f) {
+                Location l = lastKnown();
+                if (l != null) { rememberPlace(l); lat = (float) l.getLatitude(); lon = (float) l.getLongitude(); }
+            }
+            if (lat != 999f) {
+                int day = cal.get(java.util.Calendar.YEAR) * 400 + cal.get(java.util.Calendar.DAY_OF_YEAR);
+                if (day != sunDay) { sunDay = day; sun = Sun.times(lat, lon, cal); }
+                if (sun != null) { rise = sun[0]; set = sun[1]; }
+            }
+        }
+        return min >= set || min < rise;
+    }
+
+    Location lastKnown() {
+        if (checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) return null;
+        for (String p : new String[]{LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER, LocationManager.PASSIVE_PROVIDER}) {
+            try { Location l = lm.getLastKnownLocation(p); if (l != null) return l; } catch (Exception ignored) { }
+        }
+        return null;
+    }
+
+    /** Cheap: called every minute. Only touches views when the theme actually flips. */
+    void refreshTheme(boolean force) {
+        boolean night = isNight();
+        drive.setNight(night);
+        int mode = themeMode();
+        boolean light = mode == 3 || (mode < 2 && !night);
+        Look want = light ? Look.LIGHT : Look.DARK;
+        if (want != look || force) applyTheme(want);
+    }
+
+    void applyTheme(Look L) {
+        look = L;
+        Window w = getWindow();
+        w.setBackgroundDrawable(new ColorDrawable(L.bg)); // the only full-screen fill (root has none)
+        w.setStatusBarColor(L.bg);
+        w.setNavigationBarColor(L.bg);
+        if (Build.VERSION.SDK_INT >= 30) {
+            WindowInsetsController c = w.getInsetsController();
+            if (c != null) {
+                int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                c.setSystemBarsAppearance(L.light ? mask : 0, mask);
+            }
+        }
+        applyImmersive();
+
+        int one = Math.max(1, dp(1));
+        drivePanel.setBackground(L.card(dp(20), one));
+        mediaCard.setBackground(L.card(dp(20), one));
+        volCard.setBackground(L.card(dp(20), one));
+        settingsBtn.setBackground(L.card(dp(20), one));
+        settingsBtn.setForeground(L.rippleRect(dp(20)));
+        speedBox.setBackground(L.rippleRect(dp(16)));
+        artIv.setBackground(L.round(L.cardHi, dp(14)));
+        dock.setBackground(L.dockBg(one));
+        drawer.setBackgroundColor(L.drawer);
+
+        speedTv.setTextColor(L.text);
+        clockTv.setTextColor(L.text);
+        titleTv.setTextColor(L.text);
+        unitTv.setTextColor(L.text2);
+        dateTv.setTextColor(L.text2);
+        artistTv.setTextColor(L.text2);
+        volTxt.setTextColor(L.text2);
+        gpsTv.setTextColor(L.text3);
+        if (ramTv != null) { ramTv.setTextColor(L.text3); ramTv.setBackground(L.rippleRect(dp(8))); }
+        headingTv.setTextColor(L.text3);
+        posTv.setTextColor(L.text3);
+        durTv.setTextColor(L.text3);
+        appTv.setTextColor(L.accent);
+
+        ColorStateList t1 = L.csl(L.text), t2 = L.csl(L.text2), ln = L.csl(L.line);
+        wifiIv.setImageTintList(t2);
+        ((ImageButton) prevBtn).setImageTintList(t1);
+        ((ImageButton) nextBtn).setImageTintList(t1);
+        prevBtn.setBackground(L.rippleRound());
+        nextBtn.setBackground(L.rippleRound());
+        playBtn.setBackground(L.play());
+        playBtn.setImageTintList(L.csl(L.bg));
+        muteBtn.setImageTintList(t2);
+        muteBtn.setBackground(L.rippleRound());
+        ((ImageButton) settingsBtn).setImageTintList(t2);
+        prog.setProgressTintList(t1);
+        prog.setProgressBackgroundTintList(ln);
+        volBar.setProgressTintList(t1);
+        volBar.setProgressBackgroundTintList(ln);
+        volBar.setThumbTintList(t1);
+
+        drive.setLight(L.light);
+        drive.setCarColor(carColor());
+        if (artBmp == null) setArt(null);
+        renderSpeed(lastSpeed);
+        if (gridAdapter != null) { gridAdapter.notifyDataSetChanged(); buildDock(); }
+    }
+
+    void pickTheme() {
+        new AlertDialog.Builder(this, dlg())
+                .setTitle("Theme")
+                .setSingleChoiceItems(THEME_NAMES, themeMode(), (d, w) -> {
+                    sp.edit().putInt("theme", w).apply();
+                    sunDay = -1;
+                    d.dismiss();
+                    refreshTheme(false);
+                })
+                .show();
+    }
+
+    // ------------------------------------------------------------------ screensaver
+
+    int saverMinutes() { return sp.getInt("saverMin", 2); }
+
+    final Runnable idleR = new IdleR();
+    class IdleR implements Runnable {
+        @Override public void run() {
+            if (!resumed || saverOn) return;
+            if (drawer.getVisibility() == View.VISIBLE || lastSpeed > 2.8f) { // drawer open / driving: wait
+                ui.postDelayed(this, 30_000);
+                return;
+            }
+            showSaver();
+        }
+    }
+
+    void resetIdle() {
+        ui.removeCallbacks(idleR);
+        int min = saverMinutes();
+        if (min > 0 && resumed && !saverOn) ui.postDelayed(idleR, min * 60_000L);
+    }
+
+    @Override
+    public void onUserInteraction() {
+        super.onUserInteraction();
+        resetIdle();
+    }
+
+    /** While the saver is up, a touch only wakes the dashboard; it never presses what is underneath. */
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent e) {
+        int a = e.getActionMasked();
+        if (saverOn && a == MotionEvent.ACTION_DOWN) {
+            hideSaver();
+            swallowTouch = true;
+        }
+        if (swallowTouch) {
+            if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) swallowTouch = false;
+            return true;
+        }
+        return super.dispatchTouchEvent(e);
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent e) {
+        if (saverOn && e.getAction() == KeyEvent.ACTION_DOWN) hideSaver();
+        return super.dispatchKeyEvent(e);
+    }
+
+    String nowPlayingLine() {
+        MediaMetadata m = ctl == null ? null : ctl.getMetadata();
+        if (m == null) return "";
+        String t = first(m, MediaMetadata.METADATA_KEY_TITLE, MediaMetadata.METADATA_KEY_DISPLAY_TITLE);
+        String a = first(m, MediaMetadata.METADATA_KEY_ARTIST, MediaMetadata.METADATA_KEY_ALBUM_ARTIST);
+        if (t == null) return "";
+        return "\u266A  " + t + (a == null ? "" : "  \u00B7  " + a);
+    }
+
+    void showSaver() {
+        if (saverOn || saver == null) return;
+        saverOn = true;
+        ui.removeCallbacks(idleR);
+        ui.removeCallbacks(ticker);
+        saver.setNowPlaying(nowPlayingLine());
+        int v = lastSpeed < 0 ? 0 : Math.round(lastSpeed * (mph() ? 2.23694f : 3.6f));
+        saver.setSpeed(v >= 5 ? v + (mph() ? " MPH" : " KM/H") : "");
+        saver.setAlpha(0f);
+        saver.setVisibility(View.VISIBLE);
+        saver.start();
+        saver.animate().alpha(1f).setDuration(700).withLayer()
+                .withEndAction(() -> { if (saverOn) mainView.setVisibility(View.INVISIBLE); }) // nothing drawn underneath
+                .start();
+        drive.setActive(false);
+    }
+
+    void hideSaver() {
+        if (!saverOn) return;
+        saverOn = false;
+        saver.animate().cancel();
+        mainView.setVisibility(View.VISIBLE);
+        saver.stop();
+        saver.setVisibility(View.GONE);
+        drive.setActive(resumed);
+        if (resumed) renderState(); // restart the progress ticker
+        resetIdle();
+    }
+
+    void pickSaver() {
+        final int[] opts = {0, 1, 2, 5, 10, 15};
+        String[] names = new String[opts.length];
+        int cur = 0;
+        for (int i = 0; i < opts.length; i++) {
+            names[i] = opts[i] == 0 ? "Off" : "After " + opts[i] + " min idle (when parked)";
+            if (opts[i] == saverMinutes()) cur = i;
+        }
+        new AlertDialog.Builder(this, dlg())
+                .setTitle("Screensaver  ·  long-press the clock to start it now")
+                .setSingleChoiceItems(names, cur, (d, w) -> {
+                    sp.edit().putInt("saverMin", opts[w]).apply();
+                    d.dismiss();
+                    resetIdle();
+                })
+                .show();
+    }
+
+    // ------------------------------------------------------------------ RAM optimiser
+
+    final Runnable ramTick = new RamTick();
+    class RamTick implements Runnable {
+        @Override public void run() { updateRam(); ui.postDelayed(this, 15_000); }
+    }
+
+    final Runnable homeClean = new HomeClean();
+    class HomeClean implements Runnable {
+        @Override public void run() { booster.auto(dockSet(), player()); }
+    }
+
+    final Runnable periodicClean = new PeriodicClean();
+    class PeriodicClean implements Runnable {
+        @Override public void run() { booster.auto(dockSet(), player()); ui.postDelayed(this, 3 * 60_000); }
+    }
+
+    final Runnable bootClean = new BootClean();
+    class BootClean implements Runnable {
+        @Override public void run() { booster.lastAuto = 0; booster.auto(dockSet(), player()); }
+    }
+
+    Set<String> dockSet() {
+        Set<String> d = new HashSet<>();
+        for (int i = 0; i < SLOTS; i++) { String p = sp.getString("dock" + i, null); if (p != null) d.add(p); }
+        return d;
+    }
+
+    void updateRam() {
+        int pct = booster.usedPct();
+        setT(ramTv, "RAM " + pct + "%");
+        int col = pct >= 88 ? look.alert : look.text3;
+        if (ramTv.getCurrentTextColor() != col) ramTv.setTextColor(col);
+    }
+
+    void manualClean() {
+        if (booster.busy) return;
+        setT(ramTv, "CLEANING");
+        booster.cleanNow(dockSet(), player());
+    }
+
+    static String mb(long bytes) { return Math.round(bytes / 1048576f) + " MB"; }
+
+    class BoostL implements Booster.Listener {
+        @Override public void onCleaned(Booster.Result r) {
+            updateRam();
+            if (!r.manual) return; // automatic passes are silent
+            String used = "RAM " + Math.round(100f * (r.total - r.avail) / r.total) + "% used";
+            if (r.freed < 8L << 20 && r.stopped <= 0) toast("Already lean  ·  " + used);
+            else toast("Freed " + mb(r.freed) + (r.stopped > 0 ? " from " + r.stopped + " apps" : "") + "  ·  " + used);
+        }
+
+        @Override public void onAutoBlocked(String pkg) {
+            toast(labelOf(pkg) + " kept restarting itself, so it is now blocked from running in the background. "
+                    + "Undo in RAM optimiser.");
+        }
+
+        @Override public void onDeepResult(boolean ok) {
+            toast(ok ? "Deep mode on (root granted)" : "Root was not granted: staying in normal mode");
+            showOptimizer();
+        }
+    }
+
+    void showOptimizer() {
+        ActivityManager.MemoryInfo m = booster.mem();
+        final boolean rootPresent = RootShell.present(), deep = booster.deepOn();
+        final Set<String> never = booster.set("boostNever"), always = booster.set("boostAlways"),
+                blocked = booster.set("boostBlocked");
+        long lastAt = sp.getLong("lastAt", 0);
+        final List<String> labels = new ArrayList<>();
+        final List<Runnable> acts = new ArrayList<>();
+        labels.add("Clean now");
+        acts.add(this::manualClean);
+        labels.add("Automatic:  " + (booster.autoOn() ? "on — acts only when RAM is tight" : "off"));
+        acts.add(() -> { sp.edit().putBoolean("boostAuto", !booster.autoOn()).apply(); showOptimizer(); });
+        labels.add("Keep dock apps ready:  " + (booster.keepDock() ? "on" : "off"));
+        acts.add(() -> { sp.edit().putBoolean("boostDock", !booster.keepDock()).apply(); showOptimizer(); });
+        labels.add("Never stop…  (" + never.size() + ")");
+        acts.add(() -> pickAppSet("Never stop these apps", "boostNever", false));
+        labels.add("Always stop in background…  (" + always.size() + ")");
+        acts.add(() -> pickAppSet("Always stop when in background", "boostAlways", true));
+        labels.add("Deep mode (root):  " + (deep ? "on" : rootPresent ? "off — tap to enable" : "needs a rooted unit"));
+        acts.add(() -> {
+            if (deep) { booster.disableDeep(); toast("Deep mode off"); showOptimizer(); }
+            else if (rootPresent) { toast("Asking for root…"); booster.enableDeep(); }
+            else toast("No root found on this head unit. Normal mode is active and safe.");
+        });
+        if (deep) {
+            labels.add("Auto-block apps that keep restarting:  " + (booster.autoBlockOn() ? "on" : "off"));
+            acts.add(() -> { sp.edit().putBoolean("boostAutoBlock", !booster.autoBlockOn()).apply(); showOptimizer(); });
+            labels.add("Blocked from background…  (" + blocked.size() + ")");
+            acts.add(this::showBlocked);
+        }
+        labels.add(lastAt == 0 ? "Last clean:  not yet"
+                : "Last clean:  freed " + mb(sp.getLong("lastFreed", 0)) + ", "
+                + android.text.format.DateUtils.getRelativeTimeSpanString(lastAt));
+        acts.add(() -> { });
+        new AlertDialog.Builder(this, dlg())
+                .setTitle("RAM  ·  " + mb(m.availMem) + " free of " + mb(m.totalMem))
+                .setItems(labels.toArray(new String[0]), (d, w) -> acts.get(w).run())
+                .show();
+    }
+
+    /** Multi-select over installed apps, saved as a string set. */
+    void pickAppSet(final String title, final String key, final boolean warnSystem) {
+        if (!appsLoaded) { loadApps(() -> pickAppSet(title, key, warnSystem)); return; }
+        final Set<String> cur = booster.set(key);
+        final String[] names = new String[apps.size()];
+        final boolean[] on = new boolean[apps.size()];
+        for (int i = 0; i < apps.size(); i++) {
+            AppEntry e = apps.get(i);
+            names[i] = e.label + (e.sys ? "   (system)" : "");
+            on[i] = cur.contains(e.pkg);
+        }
+        new AlertDialog.Builder(this, dlg())
+                .setTitle(title)
+                .setMultiChoiceItems(names, on, (d, w, c) -> on[w] = c)
+                .setPositiveButton("Save", (d, w) -> {
+                    Set<String> out = new HashSet<>();
+                    for (int i = 0; i < on.length; i++) if (on[i]) out.add(apps.get(i).pkg);
+                    booster.putSet(key, out);
+                    if (warnSystem) for (String p : out) {
+                        AppEntry e = byPkg.get(p);
+                        if (e != null && e.sys) { toast("Note: system apps in this list are stopped too"); break; }
+                    }
+                    showOptimizer();
+                })
+                .setNegativeButton("Cancel", (d, w) -> showOptimizer())
+                .show();
+    }
+
+    void showBlocked() {
+        final List<String> pk = booster.sorted(booster.set("boostBlocked"));
+        final Set<String> auto = booster.set("boostAutoBlocked");
+        final List<String> labels = new ArrayList<>();
+        labels.add("+  Block an app…");
+        for (String p : pk) labels.add(labelOf(p) + (auto.contains(p) ? "   (auto: kept restarting)" : "") + "   — tap to unblock");
+        new AlertDialog.Builder(this, dlg())
+                .setTitle("Blocked from running in the background")
+                .setItems(labels.toArray(new String[0]), (d, w) -> {
+                    if (w == 0) {
+                        pickApp("Block from background", null, false, p -> {
+                            if (p == null) return;
+                            booster.blockAsync(p);
+                            toast(labelOf(p) + " blocked from background");
+                        });
+                    } else {
+                        String p = pk.get(w - 1);
+                        booster.unblockAsync(p);
+                        toast(labelOf(p) + " unblocked");
+                    }
+                })
+                .setNegativeButton("Back", (d, w) -> showOptimizer())
                 .show();
     }
 
@@ -1052,7 +1524,7 @@ public class MainActivity extends Activity {
             names[i] = ALERTS[i] == 0 ? "Off" : "Above " + ALERTS[i] + unit;
             if (ALERTS[i] == a) cur = i;
         }
-        new AlertDialog.Builder(this, R.style.Dialog)
+        new AlertDialog.Builder(this, dlg())
                 .setTitle("Speed alert (number turns red)")
                 .setSingleChoiceItems(names, cur, (d, w) -> {
                     sp.edit().putInt("alert", ALERTS[w]).apply();
