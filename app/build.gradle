@@ -10,18 +10,21 @@ android {
         applicationId 'xyz.ox1de.cardash'
         minSdk 26
         targetSdk 33
-        versionCode 19
-        versionName '2.3'
+        // CI passes the release tag in (v2.4.1 -> 2.4.1 / 2040199); local builds use these defaults.
+        // versionCode = (major*10000 + minor*100 + patch)*100 + stage (99 final, N for -betaN): tools/version.sh.
+        versionName(project.findProperty('appVersionName') ?: '2.4')
+        versionCode((project.findProperty('appVersionCode') ?: '2040099') as int)
     }
 
     signingConfigs {
-        // Same key as the prebuilt APK, so Gradle/CI builds install as updates over it.
+        // Every build must be signed with the same key, or Android refuses it as an update.
+        // Defaults to the committed keystore; CI can override it with repository secrets.
         cardash {
-            storeFile rootProject.file('keystore/cardash.p12')
+            storeFile file(project.findProperty('signStoreFile') ?: rootProject.file('keystore/cardash.p12'))
             storeType 'pkcs12'
-            storePassword 'cardash'
-            keyAlias 'cardash'
-            keyPassword 'cardash'
+            storePassword(project.findProperty('signStorePassword') ?: 'cardash')
+            keyAlias(project.findProperty('signKeyAlias') ?: 'cardash')
+            keyPassword(project.findProperty('signKeyPassword') ?: 'cardash')
         }
     }
 

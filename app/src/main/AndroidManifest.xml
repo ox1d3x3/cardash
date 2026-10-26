@@ -17,6 +17,8 @@
     <!-- Rear view: the reversing camera wired into the head unit (asked only when you first use it) -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- Self-update from GitHub Releases (Android asks you to allow it once) -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <queries>
         <intent>
@@ -65,6 +67,18 @@
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
+
+        <!-- self-update: installer results, and bringing the dashboard back after an update -->
+        <receiver
+            android:name=".InstallReceiver"
+            android:exported="false" />
+        <receiver
+            android:name=".PackageReplaced"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <service
             android:name=".ClockDream"

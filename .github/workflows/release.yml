@@ -1,0 +1,135 @@
+name: Release
+
+# Push a tag like v2.4 / v2.4.1 / v2.5-beta1 (or publish a release in the GitHub UI) and this
+# builds the APK with that version, signs it with the CarDash key and attaches it to the release.
+# The app's built-in updater picks the new release up from there.
+on:
+  push:
+    tags: ['v*']
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release, e.g. v2.4.1 (created on the selected branch if it does not exist)'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check out the tag
+        run: |
+          # tag push / release: already on the tag. Manual run: build the tag if it exists, else this branch.
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then git checkout -q "refs/tags/$TAG"; fi
+          git log -1 --oneline
+
+      - name: Work out the version
+        id: ver
+        run: |
+          bash tools/version.sh "$TAG" | tee -a "$GITHUB_OUTPUT"
+          # A tag push and a UI-published release can both fire for one tag: build once.
+          if gh release view "$TAG" --json assets -q '.assets[].name' 2>/dev/null | grep -qx "CarDash-$TAG.apk"; then
+            echo "CarDash-$TAG.apk is already attached to $TAG; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-java@v4
+        if: steps.ver.outputs.skip != 'true'
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        if: steps.ver.outputs.skip != 'true'
+        with:
+          gradle-version: '8.9'
+
+      - name: Signing key
+        if: steps.ver.outputs.skip != 'true'
+        env:
+          KEYSTORE_B64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          STORE_PASS: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          # Optional: repository secrets override the committed keystore. Keep using ONE key forever:
+          # Android only installs an update that is signed with the same key as the installed app.
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.p12"
+            {
+              echo "SIGN_ARGS=-PsignStoreFile=$RUNNER_TEMP/release.p12 -PsignStorePassword=$STORE_PASS -PsignKeyAlias=${KEY_ALIAS:-cardash} -PsignKeyPassword=${KEY_PASS:-$STORE_PASS}"
+            } >> "$GITHUB_ENV"
+            echo "Using the signing key from repository secrets."
+          else
+            echo "Using keystore/cardash.p12 from the repository."
+          fi
+
+      - name: Build APK
+        if: steps.ver.outputs.skip != 'true'
+        run: |
+          gradle :app:assembleRelease --no-daemon \
+            -PappVersionName="${{ steps.ver.outputs.name }}" \
+            -PappVersionCode="${{ steps.ver.outputs.code }}" ${SIGN_ARGS:-}
+          mkdir -p dist
+          cp app/build/outputs/apk/release/*.apk "dist/CarDash-$TAG.apk"
+          (cd dist && sha256sum "CarDash-$TAG.apk" > "CarDash-$TAG.apk.sha256")
+          ls -l dist
+
+      - name: Check the APK
+        if: steps.ver.outputs.skip != 'true'
+        run: |
+          AAPT2=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)
+          "$AAPT2" dump badging "dist/CarDash-$TAG.apk" | head -1 | tee badging.txt
+          grep -q "package: name='xyz.ox1de.cardash' versionCode='${{ steps.ver.outputs.code }}'" badging.txt
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$APKSIGNER" verify --print-certs "dist/CarDash-$TAG.apk" | grep -i "SHA-256 digest"
+
+      - name: Release notes
+        if: steps.ver.outputs.skip != 'true'
+        run: |
+          # The CHANGELOG.md section for this version ("## v2.4 ..." up to the next "## ").
+          V="${{ steps.ver.outputs.name }}"
+          awk -v v="$V" '
+            /^## / { if (on) exit; h=$2; sub(/^v/, "", h); if (h == v) { on=1; next } }
+            on { print }
+          ' CHANGELOG.md > notes.md || true
+          if [ ! -s notes.md ]; then echo "CarDash $TAG" > notes.md; fi
+          {
+            echo
+            echo "---"
+            echo "**Install:** download \`CarDash-$TAG.apk\` below and open it on the head unit."
+            echo "Already on CarDash 2.4 or newer? It updates itself (Settings → Updates)."
+          } >> notes.md
+          cat notes.md
+
+      - name: Publish
+        if: steps.ver.outputs.skip != 'true'
+        run: |
+          PRE=""
+          [ "${{ steps.ver.outputs.prerelease }}" = "true" ] && PRE="--prerelease"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+            # keep notes written in the GitHub UI; fill them in only if empty
+            if [ -z "$(gh release view "$TAG" --json body -q .body)" ]; then
+              gh release edit "$TAG" --notes-file notes.md
+            fi
+          else
+            gh release create "$TAG" dist/* --title "CarDash $TAG" --notes-file notes.md --target "$GITHUB_SHA" $PRE
+          fi
+          gh release view "$TAG" --json url,assets -q '.url, (.assets[].name)'

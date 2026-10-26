@@ -110,6 +110,11 @@ public class MainActivity extends Activity {
     View volCard, settingsBtn, speedBox, mediaCard, prevBtn, nextBtn;
     Look look;
     Booster booster;
+    Updater updater;
+    TextView updChip;
+    AlertDialog updDlg;
+    boolean updManual, updInstallWhenReady;
+    String updAutoTried;   // the release the parked auto-install already tried, so a cancel isn't retried every 30 s
     TextView ramTv;
     ClockView saver;
     View mainView;
@@ -202,6 +207,14 @@ public class MainActivity extends Activity {
         refreshTheme(true); // before the first frame, so there is never a wrong-theme flash
         drive.welcome();    // car fades in, lamps flash once
         booster = new Booster(this, sp, ui, listenerCn, new BoostL());
+        updChip = findViewById(R.id.updChip);
+        updater = new Updater(this, sp, ui, this::onUpdateState);
+        InstallReceiver.active = updater;
+        updChip.setOnClickListener(v -> showUpdateDialog());
+        Anim.press(updChip, 0.9f);
+        String ver = updater.installedName(), lastVer = sp.getString("lastVer", null);
+        if (lastVer != null && !lastVer.equals(ver)) ui.postDelayed(() -> toast("Updated to CarDash " + ver), 1500);
+        if (!ver.equals(lastVer)) sp.edit().putString("lastVer", ver).apply();
         setupCam();
         ramTv.setOnClickListener(v -> manualClean());
         ramTv.setOnLongClickListener(v -> { showOptimizer(); return true; });
@@ -293,6 +306,8 @@ public class MainActivity extends Activity {
         ui.postDelayed(ramTick, 15_000);
         ui.postDelayed(homeClean, 1500);   // you just came back home: tidy up after the app you left
         ui.postDelayed(periodicClean, 3 * 60_000);
+        if (updater.dueForAutoCheck()) ui.postDelayed(updCheckR, 25_000); // give the unit's network time to come up
+        if (updater.state == Updater.State.READY) ui.postDelayed(updInstallR, 30_000);
         resetIdle();
     }
 
@@ -308,6 +323,8 @@ public class MainActivity extends Activity {
         ui.removeCallbacks(ramTick);
         ui.removeCallbacks(homeClean);
         ui.removeCallbacks(periodicClean);
+        ui.removeCallbacks(updCheckR);
+        ui.removeCallbacks(updInstallR);
         ui.removeCallbacks(idleR);
         // Do nothing while another app (maps, player) is in front: saves CPU + RAM on 2GB units.
         stopLocation();
@@ -1371,6 +1388,7 @@ public class MainActivity extends Activity {
         final int saverMin = saverMinutes();
         final List<String> labels = new ArrayList<>();
         final List<Runnable> acts = new ArrayList<>();
+        labels.add("Updates:  " + updateSummary());                                acts.add(this::showUpdates);
         labels.add("Music player:  " + playerLabel());                           acts.add(this::pickPlayer);
         labels.add("Theme:  " + THEME_NAMES[themeMode()]);                       acts.add(this::pickTheme);
         labels.add("Car colour:  " + CAR_COLOR_NAMES[carColorIndex()]);          acts.add(this::pickCarColor);
@@ -1593,6 +1611,14 @@ public class MainActivity extends Activity {
         volTxt.setTextColor(L.text2);
         gpsTv.setTextColor(L.text3);
         if (ramTv != null) { ramTv.setTextColor(L.text3); ramTv.setBackground(L.rippleRect(dp(8))); }
+        if (updChip != null) {
+            android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+            g.setCornerRadius(dp(14));
+            g.setColor((L.accent & 0x00FFFFFF) | (L.light ? 0x22000000 : 0x33000000));
+            g.setStroke(Math.max(1, dp(1)), (L.accent & 0x00FFFFFF) | 0x88000000);
+            updChip.setBackground(g);
+            updChip.setTextColor(L.accent);
+        }
         headingTv.setTextColor(L.text3);
         posTv.setTextColor(L.text3);
         durTv.setTextColor(L.text3);
@@ -2609,6 +2635,182 @@ public class MainActivity extends Activity {
 
     void startSafe(Intent i) {
         if (!tryStart(i)) toast("Not available on this unit");
+    }
+
+    // ------------------------------------------------------------------ updates (GitHub Releases)
+
+    static final String[] UPD_MODES = {"Off", "Download, then ask me", "Install automatically when parked"};
+
+    final Runnable updCheckR = new UpdCheck();
+    class UpdCheck implements Runnable {
+        @Override public void run() { if (resumed) updater.check(updater.mode() != Updater.MODE_OFF, null); }
+    }
+
+    /** Automatic mode: installs once the car has been parked a while and nothing is in the way. */
+    final Runnable updInstallR = new UpdInstall();
+    class UpdInstall implements Runnable {
+        @Override public void run() {
+            if (!resumed || updater.state != Updater.State.READY || updater.mode() != Updater.MODE_AUTO) return;
+            Updater.Release r = updater.release;
+            if (r == null || r.tag.equals(updAutoTried)) return;
+            if (!rootUpdates() && !updater.canInstallWithoutRoot()) return;   // needs the one-time permission: chip waits for a tap
+            boolean parked = lastSpeed < 0.5f && !camOpen && !drawerOpen && !isFinishing();
+            if (!parked) { ui.postDelayed(this, 30_000); return; }
+            updAutoTried = r.tag;
+            toast("Installing CarDash " + r.tag + "…");
+            updater.install(rootUpdates());
+        }
+    }
+
+    boolean rootUpdates() { return booster.deepOn() && RootShell.present(); }
+
+    String updateSummary() {
+        String v = "v" + updater.installedName();
+        Updater.Release r = updater.release;
+        switch (updater.state) {
+            case READY: return v + "  ·  " + r.tag + " ready to install";
+            case AVAILABLE: return v + "  ·  " + r.tag + " available";
+            case DOWNLOADING: return v + "  ·  downloading " + updater.progress + "%";
+            default: return v + "  ·  " + UPD_MODES[updater.mode()].toLowerCase(Locale.ROOT);
+        }
+    }
+
+    void onUpdateState() {
+        Updater.Release r = updater.release;
+        String chip = null;
+        switch (updater.state) {
+            case AVAILABLE: chip = "\u2191 " + r.tag; break;
+            case DOWNLOADING: chip = "\u2191 " + updater.progress + "%"; break;
+            case READY: chip = "\u2191 " + r.tag + "  INSTALL"; break;
+            case INSTALLING: chip = "INSTALLING\u2026"; break;
+            default: break;
+        }
+        if (chip == null) {
+            if (updChip.getVisibility() == View.VISIBLE) updChip.animate().alpha(0f).setStartDelay(0).setDuration(200)
+                    .withEndAction(() -> updChip.setVisibility(View.GONE)).start();
+        } else {
+            setT(updChip, chip);
+            if (updChip.getVisibility() != View.VISIBLE) {
+                updChip.setAlpha(0f);
+                updChip.setScaleX(0.8f);
+                updChip.setScaleY(0.8f);
+                updChip.setVisibility(View.VISIBLE);
+                updChip.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(320).setInterpolator(Anim.POP).start();
+            }
+        }
+        if (updater.state == Updater.State.READY) {
+            if (updInstallWhenReady) { updInstallWhenReady = false; installUpdate(); }
+            else if (updater.mode() == Updater.MODE_AUTO) { ui.removeCallbacks(updInstallR); ui.postDelayed(updInstallR, 20_000); }
+        }
+        // a dialog the user opened follows along
+        if (updDlg != null && updDlg.isShowing()) {
+            if (updater.state == Updater.State.DOWNLOADING) updDlg.setMessage("Downloading " + (r != null ? r.tag : "") + "…  " + updater.progress + "%");
+            else if (updManual && updater.state != Updater.State.CHECKING) { updDlg.dismiss(); updManual = false; showCheckResult(); }
+        }
+    }
+
+    void showCheckResult() {
+        switch (updater.state) {
+            case UP_TO_DATE: toast("You're on the latest version (v" + updater.installedName() + ")"); break;
+            case FAILED:
+                new AlertDialog.Builder(this, dlg()).setTitle("Update check failed").setMessage(updater.error)
+                        .setPositiveButton("OK", null).show();
+                break;
+            default: showUpdateDialog();
+        }
+    }
+
+    void showUpdateDialog() {
+        final Updater.Release r = updater.release;
+        if (r == null || updater.state == Updater.State.UP_TO_DATE || updater.state == Updater.State.IDLE) { showUpdates(); return; }
+        String notes = r.notes.isEmpty() ? "" : "\n\n" + r.notes;
+        AlertDialog.Builder b = new AlertDialog.Builder(this, dlg())
+                .setTitle("CarDash " + r.tag + (r.pre ? " (beta)" : "") + (updater.state == Updater.State.READY ? " is ready" : " is available"))
+                .setNeutralButton("Later", null);
+        switch (updater.state) {
+            case READY:
+                b.setMessage("You have v" + updater.installedName() + "." + notes).setPositiveButton("Install now", (d, w) -> installUpdate());
+                break;
+            case DOWNLOADING:
+                b.setMessage("Downloading…  " + updater.progress + "%" + notes);
+                updInstallWhenReady = true;
+                break;
+            case INSTALLING:
+                b.setMessage("Installing…");
+                break;
+            case FAILED:
+                b.setMessage(updater.error + notes).setPositiveButton("Try again", (d, w) -> { updInstallWhenReady = true; updater.download(); });
+                break;
+            default:
+                b.setMessage("You have v" + updater.installedName() + "." + notes)
+                        .setPositiveButton("Download & install", (d, w) -> { updInstallWhenReady = true; updater.download(); });
+        }
+        updDlg = b.show();
+    }
+
+    void installUpdate() {
+        if (!rootUpdates() && !updater.canInstallWithoutRoot()) {
+            new AlertDialog.Builder(this, dlg())
+                    .setTitle("Allow CarDash to install updates")
+                    .setMessage("Android asks for this once: switch on \"Allow from this source\" for CarDash, then come back "
+                            + "and tap the update chip (or Settings → Updates) again.")
+                    .setPositiveButton("Open setting", (d, w) -> {
+                        if (!tryStart(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()))))
+                            startSafe(new Intent(Settings.ACTION_SECURITY_SETTINGS));
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
+            return;
+        }
+        Updater.Release r = updater.release;
+        toast("Installing CarDash " + (r != null ? r.tag : "update") + "…");
+        updater.install(rootUpdates());
+    }
+
+    void checkUpdatesNow() {
+        updManual = true;
+        updDlg = new AlertDialog.Builder(this, dlg()).setTitle("Updates").setMessage("Checking GitHub for a newer version…")
+                .setNegativeButton("Cancel", (d, w) -> updManual = false).show();
+        updater.check(false, () -> {
+            if (updManual && updDlg != null && updDlg.isShowing() && updater.state != Updater.State.CHECKING) {
+                updDlg.dismiss();
+                updManual = false;
+                showCheckResult();
+            }
+        });
+    }
+
+    void showUpdates() {
+        final int mode = updater.mode();
+        final boolean beta = updater.beta();
+        String[] items = {
+                "Check for updates now",
+                "Automatic updates:  " + UPD_MODES[mode],
+                "Beta versions (pre-releases):  " + (beta ? "on" : "off"),
+                "All releases on GitHub"};
+        new AlertDialog.Builder(this, dlg())
+                .setTitle("CarDash v" + updater.installedName() + "  ·  updates from GitHub")
+                .setItems(items, (d, w) -> {
+                    switch (w) {
+                        case 0: checkUpdatesNow(); break;
+                        case 1:
+                            new AlertDialog.Builder(this, dlg()).setTitle("Automatic updates (checked every 6 hours)")
+                                    .setSingleChoiceItems(UPD_MODES, mode, (dd, ww) -> {
+                                        sp.edit().putInt("updMode", ww).apply();
+                                        dd.dismiss();
+                                        if (ww != Updater.MODE_OFF) updater.check(true, null);
+                                    }).show();
+                            break;
+                        case 2:
+                            sp.edit().putBoolean("updBeta", !beta).apply();
+                            toast("Beta versions: " + (!beta ? "on" : "off"));
+                            updater.check(updater.mode() != Updater.MODE_OFF, null);
+                            break;
+                        default:
+                            startSafe(new Intent(Intent.ACTION_VIEW, Uri.parse(Updater.PAGE)));
+                    }
+                })
+                .show();
     }
 
     void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_SHORT).show(); }

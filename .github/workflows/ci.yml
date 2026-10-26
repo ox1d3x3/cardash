@@ -1,0 +1,44 @@
+name: CI
+
+# Every push to a branch and every pull request: build the release APK and keep it as a
+# downloadable artifact for 14 days. Tags are handled by release.yml.
+on:
+  push:
+    branches: ['**']
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build release APK
+        run: |
+          SHORT=$(git rev-parse --short HEAD)
+          gradle :app:assembleRelease --no-daemon -PappVersionName="2.4-dev+${SHORT}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CarDash-${{ github.sha }}
+          path: app/build/outputs/apk/release/*.apk
+          retention-days: 14

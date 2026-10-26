@@ -48,6 +48,21 @@
                         android:textColor="@color/text3"
                         android:textSize="11sp" />
 
+                    <!-- shown only when a new version is on GitHub: tap to install -->
+                    <TextView
+                        android:id="@+id/updChip"
+                        android:layout_width="wrap_content"
+                        android:layout_height="28dp"
+                        android:layout_marginEnd="8dp"
+                        android:fontFamily="sans-serif-medium"
+                        android:gravity="center"
+                        android:letterSpacing="0.1"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:singleLine="true"
+                        android:textSize="11sp"
+                        android:visibility="gone" />
+
                     <!-- fixed width: updating the % never re-lays-out the panel -->
                     <TextView
                         android:id="@+id/ram"
