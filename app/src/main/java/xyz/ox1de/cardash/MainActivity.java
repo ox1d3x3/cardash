@@ -75,6 +75,10 @@ public class MainActivity extends Activity {
     static final String AIMP = "com.aimp.player";
     static final int SLOTS = 6;
 
+    static final String[] CAR_COLOR_NAMES = {"White", "Silver", "Grey", "Black", "Red", "Blue", "Beige"};
+    static final int[] CAR_COLORS = {0xFFF4F5F7, 0xFFC4C8CE, 0xFF70757D, 0xFF2C2F35, 0xFFC2242C, 0xFF2E5BB8, 0xFFCBB896};
+    static final int[] ALERTS = {0, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130};
+
     final Handler ui = new Handler(Looper.getMainLooper());
     final ExecutorService bg = Executors.newSingleThreadExecutor();
 
@@ -95,6 +99,7 @@ public class MainActivity extends Activity {
     LinearLayout content, drivePanel, rightCol, dock;
     FrameLayout drawer;
     GridView grid;
+    DriveView drive;
 
     final List<AppEntry> apps = new ArrayList<>();
     final Map<String, AppEntry> byPkg = new HashMap<>();
@@ -155,6 +160,9 @@ public class MainActivity extends Activity {
         dock = findViewById(R.id.dock);
         drawer = findViewById(R.id.drawer);
         grid = findViewById(R.id.grid);
+        drive = findViewById(R.id.car);
+        drive.setCarColor(sp.getInt("carColor", CAR_COLORS[0]));
+        speedTv.setFontFeatureSettings("tnum"); // fixed-width digits: no jitter as speed changes
 
         artIv.setClipToOutline(true);
 
@@ -218,12 +226,14 @@ public class MainActivity extends Activity {
         startLocation();
         connectMedia();
         applyImmersive();
+        drive.setActive(true);
     }
 
     @Override
     protected void onPause() {
         super.onPause();
         resumed = false;
+        drive.setActive(false);
         // Do nothing while another app (maps, player) is in front: saves CPU + RAM on 2GB units.
         stopLocation();
         disconnectMedia();
@@ -377,6 +387,9 @@ public class MainActivity extends Activity {
         setT(clockTv, new SimpleDateFormat(pattern, Locale.getDefault()).format(d));
         String dp = DateFormat.getBestDateTimePattern(Locale.getDefault(), "EEEEdMMMM");
         setT(dateTv, new SimpleDateFormat(dp, Locale.getDefault()).format(d));
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        int min = cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cal.get(java.util.Calendar.MINUTE);
+        drive.setNight(min >= 18 * 60 + 30 || min < 6 * 60); // headlight beams + tail-lamp glow
     }
 
     // ------------------------------------------------------------------ speed (GPS)
@@ -435,8 +448,13 @@ public class MainActivity extends Activity {
 
     void renderSpeed(float ms) {
         lastSpeed = ms;
-        if (ms < 0) { setT(speedTv, "--"); return; }
-        setT(speedTv, Integer.toString(Math.round(ms * (mph() ? 2.23694f : 3.6f))));
+        drive.setSpeed(ms);
+        if (ms < 0) { setT(speedTv, "--"); speedTv.setTextColor(getColor(R.color.text)); return; }
+        int v = Math.round(ms * (mph() ? 2.23694f : 3.6f));
+        setT(speedTv, Integer.toString(v));
+        int alert = sp.getInt("alert", 0);
+        int col = alert > 0 && v > alert ? 0xFFFF5A5F : getColor(R.color.text);
+        if (speedTv.getCurrentTextColor() != col) speedTv.setTextColor(col);
     }
 
     static String compass(float b) {
@@ -960,9 +978,13 @@ public class MainActivity extends Activity {
     void showSettings() {
         final boolean imm = sp.getBoolean("immersive", false);
         final boolean locOk = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+        final int alert = sp.getInt("alert", 0);
+        final String unit = mph() ? "mph" : "km/h";
         String[] items = {
                 "Music player:  " + playerLabel(),
-                "Speed units:  " + (mph() ? "mph" : "km/h"),
+                "Car colour:  " + CAR_COLOR_NAMES[carColorIndex()],
+                "Speed units:  " + unit,
+                "Speed alert:  " + (alert == 0 ? "off" : alert + " " + unit),
                 "Media access:  " + (listenerOk() ? "granted" : "tap to grant"),
                 "Location (speed):  " + (locOk ? "granted" : "tap to grant"),
                 "Hide status/nav bars:  " + (imm ? "on" : "off"),
@@ -975,30 +997,67 @@ public class MainActivity extends Activity {
                 .setItems(items, (d, w) -> {
                     switch (w) {
                         case 0: pickPlayer(); break;
-                        case 1: toggleUnits(); break;
-                        case 2: openListenerSettings(); break;
-                        case 3:
+                        case 1: pickCarColor(); break;
+                        case 2: toggleUnits(); break;
+                        case 3: pickAlert(); break;
+                        case 4: openListenerSettings(); break;
+                        case 5:
                             if (locOk) openAppInfo(getPackageName());
                             else requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION,
                                     Manifest.permission.ACCESS_COARSE_LOCATION}, 1);
                             break;
-                        case 4:
+                        case 6:
                             sp.edit().putBoolean("immersive", !imm).apply();
                             applyImmersive();
                             break;
-                        case 5:
+                        case 7:
                             if (!tryStart(new Intent(Settings.ACTION_HOME_SETTINGS)))
                                 startSafe(new Intent(Settings.ACTION_SETTINGS));
                             break;
-                        case 6: {
+                        case 8: {
                             SharedPreferences.Editor ed = sp.edit().remove("dockInit");
                             for (int i = 0; i < SLOTS; i++) ed.remove("dock" + i);
                             ed.apply();
                             buildDock();
                             break;
                         }
-                        case 7: startSafe(new Intent(Settings.ACTION_SETTINGS)); break;
+                        case 9: startSafe(new Intent(Settings.ACTION_SETTINGS)); break;
                     }
+                })
+                .show();
+    }
+
+    int carColorIndex() {
+        int c = sp.getInt("carColor", CAR_COLORS[0]);
+        for (int i = 0; i < CAR_COLORS.length; i++) if (CAR_COLORS[i] == c) return i;
+        return 0;
+    }
+
+    void pickCarColor() {
+        new AlertDialog.Builder(this, R.style.Dialog)
+                .setTitle("Car colour")
+                .setSingleChoiceItems(CAR_COLOR_NAMES, carColorIndex(), (d, w) -> {
+                    sp.edit().putInt("carColor", CAR_COLORS[w]).apply();
+                    drive.setCarColor(CAR_COLORS[w]);
+                    d.dismiss();
+                })
+                .show();
+    }
+
+    void pickAlert() {
+        final String unit = mph() ? " mph" : " km/h";
+        String[] names = new String[ALERTS.length];
+        int cur = 0, a = sp.getInt("alert", 0);
+        for (int i = 0; i < ALERTS.length; i++) {
+            names[i] = ALERTS[i] == 0 ? "Off" : "Above " + ALERTS[i] + unit;
+            if (ALERTS[i] == a) cur = i;
+        }
+        new AlertDialog.Builder(this, R.style.Dialog)
+                .setTitle("Speed alert (number turns red)")
+                .setSingleChoiceItems(names, cur, (d, w) -> {
+                    sp.edit().putInt("alert", ALERTS[w]).apply();
+                    renderSpeed(lastSpeed);
+                    d.dismiss();
                 })
                 .show();
     }

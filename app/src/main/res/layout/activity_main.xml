@@ -96,15 +96,13 @@
                     android:textColor="@color/text3"
                     android:textSize="12sp" />
 
-                <ImageView
+                <xyz.ox1de.cardash.DriveView
                     android:id="@+id/car"
                     android:layout_width="match_parent"
                     android:layout_height="0dp"
                     android:layout_weight="1"
-                    android:paddingTop="10dp"
-                    android:paddingBottom="10dp"
-                    android:scaleType="fitCenter"
-                    android:src="@drawable/car_top" />
+                    android:paddingTop="8dp"
+                    android:paddingBottom="8dp" />
 
                 <TextView
                     android:id="@+id/clock"

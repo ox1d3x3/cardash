@@ -20,7 +20,8 @@
         <item name="android:windowShowWallpaper">false</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowAnimationStyle">@null</item>
-        <item name="android:windowDisablePreview">true</item>
+        <!-- show the dark background instantly on cold start instead of a blank frame -->
+        <item name="android:windowDisablePreview">false</item>
     </style>
 
     <style name="Dialog" parent="@android:style/Theme.Material.Dialog.Alert">

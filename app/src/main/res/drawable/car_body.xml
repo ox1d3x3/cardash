@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Paint layer: near-white with grey shading. Tinted at runtime with MULTIPLY, so shading survives any colour. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="200dp" android:height="400dp" android:viewportWidth="200" android:viewportHeight="400">
+    <path android:fillColor="#FFF0F2F5" android:pathData="M33 122.4L12 127.8C9 128.7 8 131.4 9 134.1L11 138.6C12 140.4 14 141.3 16 140.4L34 135.9ZM167 122.4L188 127.8C191 128.7 192 131.4 191 134.1L189 138.6C188 140.4 186 141.3 184 140.4L166 135.9Z" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M100 9C128 9 152 12.6 164 23.4C172 32.4 175 46.8 176 64.8L178 99C179 162 179 270 178 324C177 355.5 172 372.6 160 379.8C144 386.1 124 387.9 100 387.9C76 387.9 56 386.1 40 379.8C28 372.6 23 355.5 22 324C21 270 21 162 22 99L24 64.8C25 46.8 28 32.4 36 23.4C48 12.6 72 9 100 9Z" />
+    <path android:fillColor="#FFD6D9DE" android:pathData="M22 99C21 162 21 270 22 324C23 346.5 28 361.8 37 371.7C33 355.5 31 342 31 324C30 270 30 162 31 100.8C31 86.4 30 75.6 27 66.6ZM178 99C179 162 179 270 178 324C177 346.5 172 361.8 163 371.7C167 355.5 169 342 169 324C170 270 170 162 169 100.8C169 86.4 170 75.6 173 66.6Z" />
+    <path android:strokeColor="#FFD0D4DA" android:strokeWidth="1.4" android:pathData="M74 25.2C68 54 68 86.4 72 113.4M126 25.2C132 54 132 86.4 128 113.4M58 369C86 373.5 114 373.5 142 369" />
+    <path android:fillColor="#FFFAFBFC" android:strokeColor="#FFDDE0E5" android:strokeWidth="1" android:pathData="M48 176.4C76 171 124 171 152 176.4C157 216 157 270 154 304.2C124 309.6 76 309.6 46 304.2C43 270 43 216 48 176.4Z" />
+    <path android:fillColor="#FFE4E7EB" android:pathData="M47 306.9C80 312.3 120 312.3 153 306.9L152 316.8C120 322.2 80 322.2 48 316.8Z" />
+</vector>

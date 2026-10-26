@@ -5,7 +5,13 @@ framework-only Java, no AndroidX, no Kotlin, no web views. APK is ~50 KB.
 
 ## What's on screen
 - **Drive panel**: GPS speed (tap to switch km/h ↔ mph), heading, GPS status, Wi-Fi indicator,
-  top-down car render, big clock and date.
+  big clock and date, and a live top-down **2014 Accent hatch** on the road:
+  - lane markings scroll when GPS says you're moving, faster as speed rises (eased between GPS
+    fixes so it glides instead of jumping at 1 Hz)
+  - brake lights glow when you slow down hard and while stopped in traffic
+  - headlight beams + tail-lamp glow after 6:30 pm
+  - paint colour in settings (White, Silver, Grey, Black, Red, Blue, Beige)
+- **Speed alert**: pick a limit in settings and the number turns red above it.
 - **Now playing**: album art, title/artist, progress, prev / play-pause / next. Controls whatever
   app is actually playing (AIMP, Spotify, radio apps, YouTube Music...).
   Tap the card to open the player, long-press it to choose your default player (AIMP is picked
@@ -31,6 +37,9 @@ framework-only Java, no AndroidX, no Kotlin, no web views. APK is ~50 KB.
    CarDash and disable the stock launcher's auto-start if it keeps coming back after ignition.
 
 ## Why it's light
+- The car is rasterised once into a ~100 KB bitmap; an animation frame is one bitmap draw plus a
+  few rectangles on the GPU, no allocations. Frames run only while the road is actually moving
+  or a light is fading. Parked, or another app in front = zero frames, zero CPU.
 - Everything stops in `onPause`: GPS, media callbacks, the progress ticker. When Maps or AIMP is in
   front, CarDash does nothing.
 - App icons are rendered once into small 48 dp bitmaps on a background thread.
