@@ -1,0 +1,46 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'xyz.ox1de.cardash'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'xyz.ox1de.cardash'
+        minSdk 26
+        targetSdk 33
+        versionCode 1
+        versionName '1.0'
+    }
+
+    signingConfigs {
+        // Same key as the prebuilt APK, so Gradle/CI builds install as updates over it.
+        cardash {
+            storeFile rootProject.file('keystore/cardash.p12')
+            storeType 'pkcs12'
+            storePassword 'cardash'
+            keyAlias 'cardash'
+            keyPassword 'cardash'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.cardash
+        }
+        debug {
+            signingConfig signingConfigs.cardash
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+// No dependencies on purpose: framework-only keeps the app tiny and fast on 2 GB head units.

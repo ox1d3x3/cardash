@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#FF07080A</color>
+    <color name="card">#FF131519</color>
+    <color name="card_hi">#FF1B1E23</color>
+    <color name="line">#FF23262C</color>
+    <color name="text">#FFF2F3F5</color>
+    <color name="text2">#FF8B919A</color>
+    <color name="text3">#FF565B63</color>
+    <color name="accent">#FF3E6AE1</color>
+
+    <string name="app_name">CarDash</string>
+
+    <style name="Theme.CarDash" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:colorBackground">@color/bg</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:statusBarColor">@color/bg</item>
+        <item name="android:navigationBarColor">@color/bg</item>
+        <item name="android:windowShowWallpaper">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowDisablePreview">true</item>
+    </style>
+
+    <style name="Dialog" parent="@android:style/Theme.Material.Dialog.Alert">
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:windowBackground">@drawable/bg_dialog</item>
+    </style>
+</resources>

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Minimal top-down sedan, drawn by hand. Viewport 200x400. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="200dp" android:height="400dp"
+    android:viewportWidth="200" android:viewportHeight="400">
+    <!-- tyres -->
+    <path android:fillColor="#FF0B0C0E" android:pathData="M13,68h14v60h-14zM173,68h14v60h-14zM13,276h14v60h-14zM173,276h14v60h-14z" />
+    <!-- mirrors -->
+    <path android:fillColor="#FFC9CED6" android:pathData="M27,136L9,143L11,157L28,154ZM173,136L191,143L189,157L172,154Z" />
+    <!-- body -->
+    <path android:fillColor="#FFE6E9EE" android:pathData="M100,8C142,8 168,22 172,62L179,150L179,332C179,372 160,393 100,393C40,393 21,372 21,332L21,150L28,62C32,22 58,8 100,8Z" />
+    <!-- side shading -->
+    <path android:fillColor="#FFC3C8D0" android:pathData="M28,62L21,150L21,332C21,352 26,368 38,378L34,332L34,150L40,66Z" />
+    <path android:fillColor="#FFC3C8D0" android:pathData="M172,62L179,150L179,332C179,352 174,368 162,378L166,332L166,150L160,66Z" />
+    <!-- hood crease -->
+    <path android:strokeColor="#FFCDD2D9" android:strokeWidth="1.2" android:pathData="M74,30C70,60 70,88 76,112M126,30C130,60 130,88 124,112" />
+    <!-- headlights -->
+    <path android:fillColor="#FFAEDCFF" android:pathData="M40,42C52,30 66,25 78,24L72,32C60,35 50,41 44,49Z" />
+    <path android:fillColor="#FFAEDCFF" android:pathData="M160,42C148,30 134,25 122,24L128,32C140,35 150,41 156,49Z" />
+    <!-- windscreen -->
+    <path android:fillColor="#FF16191E" android:pathData="M42,124C68,108 132,108 158,124L151,174C122,165 78,165 49,174Z" />
+    <!-- glass roof -->
+    <path android:fillColor="#FF20242B" android:pathData="M50,182C80,174 120,174 150,182L150,292C120,299 80,299 50,292Z" />
+    <path android:fillColor="#FF2B3039" android:pathData="M58,190C84,184 116,184 142,190L142,204C116,198 84,198 58,204Z" />
+    <!-- rear glass -->
+    <path android:fillColor="#FF16191E" android:pathData="M51,300C80,307 120,307 149,300L157,342C122,354 78,354 43,342Z" />
+    <!-- tail lights -->
+    <path android:fillColor="#FFE5484D" android:pathData="M28,364C38,374 50,381 64,385L62,389C48,386 35,379 27,370Z" />
+    <path android:fillColor="#FFE5484D" android:pathData="M172,364C162,374 150,381 136,385L138,389C152,386 165,379 173,370Z" />
+</vector>
