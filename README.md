@@ -1,7 +1,7 @@
 # CarDash
 
 A Tesla-style home screen for cheap Android head units. Built for a 2 GB RAM / Android 13 unit:
-framework-only Java, no AndroidX, no Kotlin, no web views. APK is ~80 KB.
+framework-only Java, no AndroidX, no Kotlin, no web views. APK is ~90 KB.
 
 ## What's on screen
 - **Drive panel**: GPS speed (tap to switch km/h ↔ mph), heading, GPS status, Wi-Fi indicator,
@@ -26,6 +26,8 @@ framework-only Java, no AndroidX, no Kotlin, no web views. APK is ~80 KB.
   app is actually playing (AIMP, Spotify, radio apps, YouTube Music...).
   Tap the card to open the player, long-press it to choose your default player (AIMP is picked
   automatically if installed).
+- **Resume music after start** (opt-in): once per boot, if nothing is playing after ~8 s, presses
+  play for the last music app.
 - **Volume**: slider + mute for the media stream, stays in sync with the hardware knob/wheel buttons.
 - **Dock**: 6 app slots + all-apps grid. Tap an empty slot to fill it, long-press any slot to change it.
   Defaults are auto-detected: maps, music player, phone/BT, settings.
@@ -59,7 +61,11 @@ framework-only Java, no AndroidX, no Kotlin, no web views. APK is ~80 KB.
   spam callbacks). Song-progress timer is aligned to whole seconds, so it never skips a number.
 - Everything stops in `onPause`: GPS, media callbacks, the progress ticker. When Maps or AIMP is in
   front, CarDash does nothing.
-- App icons are rendered once at exactly their on-screen size (52 dp) on a background thread.
+- App icons are rendered once at exactly their on-screen size (52 dp) on a background thread, dock
+  icons first, so after a cold boot the dock is usable before the full app list has loaded.
+- Installing / updating / disabling an app refreshes only that app (debounced), instead of reloading
+  every icon on the unit. Some head units fire package events in bursts.
+- The road animation pauses while the app drawer covers it.
 - Text views only update when the value actually changes (no per-second relayouts).
 - Clock uses the system `TIME_TICK` broadcast instead of a timer.
 
@@ -67,15 +73,21 @@ framework-only Java, no AndroidX, no Kotlin, no web views. APK is ~80 KB.
 Android already evicts cached apps when it needs memory, and stopping apps you'll reopen just makes
 them cold-start (slower). So the optimiser is deliberately conservative:
 
-- **Acts only when RAM is tight** (< 35 % free) and goes further only when it's critical (< 15 %).
-  When there's plenty free it does nothing. Your "Always stop" list is enforced regardless.
-- **Never touches**: whatever is playing or paused in a media session, your chosen player, dock apps
-  (toggle), the keyboard, dialer/SMS, accessibility and notification-listener apps, live wallpaper,
-  device admins, Google Play services, and anything whose package name looks car-critical
-  (Bluetooth, CarPlay/Android Auto links, DVR/camera, radio, CAN/MCU, TPMS, OBD, TTS…).
-  System apps are only ever stopped if you add them to "Always stop" yourself.
-- **Learns**: apps you open from CarDash stay warm for 15 min; regulars (5+ opens, used in the last
-  3 days) stay warm unless RAM is critical.
+- **Gentle by default**: acts only below 20 % free RAM, goes further only below 10 % (or when
+  Android itself reports low memory). *Balanced* (30 % / 15 %) is optional. Anything used in the
+  last 10 minutes is never stopped, even when critical.
+- **Phone-link apps are never stopped** (CarPlay / Android Auto receivers like ZLINK, AutoKit,
+  TLink, SpeedPlay, EasyConnection, Carbit…), found three ways: package name, app label (including
+  Chinese labels like 手机互联 / 投屏), and every app that handles a phone being plugged in over USB.
+  The full list is visible in *RAM optimiser → Protected car & phone-link apps*.
+- **Also never touches**: whatever is playing or paused, your chosen player, dock apps (toggle), the
+  keyboard, dialer/SMS, accessibility and notification-listener apps, live wallpaper, device admins,
+  Google Play services, Bluetooth, DVR/cameras, radio, CAN/MCU, TPMS, OBD, TTS. Protection always
+  wins over your own lists. System apps are only stopped if you add them to "Always stop".
+- **Learns**: apps you opened in the last hour stay warm; regulars (3+ opens this week) stay warm
+  unless RAM is critical. With the optional *Usage access* it also knows about apps you opened
+  outside CarDash (from CarPlay, a notification, voice…):
+  `adb shell appops set xyz.ox1de.cardash GET_USAGE_STATS allow` if the unit hides that setting.
 - **When**: 1.5 s after you come back home, every 3 min while home is visible, and 30 s after boot.
   Never while another app is in front. Runs on a lowest-priority background thread.
 - **Normal mode (no root)** uses `killBackgroundProcesses`: by design it only removes cached /

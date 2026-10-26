@@ -25,7 +25,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
@@ -61,14 +60,6 @@ final class Booster {
         boolean manual;
     }
 
-    /** Never touched, whatever the lists say. */
-    static final String[] HARD = {"android", "com.android.systemui", "com.android.phone", "com.android.bluetooth",
-            "com.google.android.gms", "com.google.android.gsf", "com.android.vending",
-            "com.google.android.projection.gearhead", "com.android.providers.media", "com.android.shell"};
-    /** Car-critical by name: links, cameras, CAN/MCU, radio, TPMS, OBD, keyboards, voice. */
-    static final String[] KEYS = {"bluetooth", "carlink", "zlink", "carplay", "autokit", "dvr", "camera", "radio",
-            "canbus", "mcu", "tpms", "obd", "torque", "inputmethod", "keyboard", "tts", "launcher", "wallpaper"};
-
     static final long MIN = 60_000L, HOUR = 60 * MIN, DAY = 24 * HOUR;
 
     final Context ctx;
@@ -85,6 +76,9 @@ final class Booster {
     long lastAuto;
     final Map<String, Long> killedAt = new HashMap<>(); // optimiser thread only
     RootShell root;                                      // optimiser thread only
+    volatile Map<String, String> labels = new HashMap<>(); // launcher's app labels, for name matching
+    volatile Set<String> carApps;                          // cached protected phone-connection / car apps
+    long carAppsAt;
 
     Booster(Context c, SharedPreferences prefs, Handler h, ComponentName lcn, Listener l) {
         ctx = c.getApplicationContext();
@@ -113,6 +107,7 @@ final class Booster {
     boolean keepDock() { return sp.getBoolean("boostDock", true); }
     boolean deepOn() { return sp.getBoolean("boostRoot", false); }
     boolean autoBlockOn() { return sp.getBoolean("boostAutoBlock", true); }
+    int mode() { return sp.getInt("boostMode", Policy.GENTLE); }
 
     Set<String> set(String key) {
         Set<String> s = sp.getStringSet(key, null);
@@ -130,11 +125,43 @@ final class Booster {
                 .putLong("t:" + pkg, System.currentTimeMillis()).apply();
     }
 
-    /** Recently opened, or a regular: keep it cached so reopening is instant. */
-    boolean warm(String p, long now) {
+    /** Recently in front, or a regular: keep it cached so reopening is instant. */
+    boolean warm(String p, long now, int level, boolean manual, Map<String, Long> usage) {
         long t = use.getLong("t:" + p, 0);
-        int c = use.getInt("c:" + p, 0);
-        return now - t < 15 * MIN || (c >= 5 && now - t < 3 * DAY);
+        Long u = usage == null ? null : usage.get(p);
+        if (u != null && u > t) t = u; // opened some other way (notification, CarPlay app, voice...)
+        return Policy.keepWarm(t, use.getInt("c:" + p, 0), now, level, mode(), manual);
+    }
+
+    // ------------------------------------------------------------------ usage access (optional)
+
+    boolean usageAccess() {
+        try {
+            android.app.AppOpsManager ao = ctx.getSystemService(android.app.AppOpsManager.class);
+            int m = android.os.Build.VERSION.SDK_INT >= 29
+                    ? ao.unsafeCheckOpNoThrow(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), ctx.getPackageName())
+                    : ao.checkOpNoThrow(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), ctx.getPackageName());
+            return m == android.app.AppOpsManager.MODE_ALLOWED;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** Last time each app was in front, from Android itself (only if Usage access is granted). */
+    Map<String, Long> lastUsed() {
+        if (!usageAccess()) return null;
+        try {
+            android.app.usage.UsageStatsManager usm = ctx.getSystemService(android.app.usage.UsageStatsManager.class);
+            long now = System.currentTimeMillis();
+            Map<String, Long> m = new HashMap<>();
+            for (android.app.usage.UsageStats u : usm.queryUsageStats(android.app.usage.UsageStatsManager.INTERVAL_DAILY, now - 2 * DAY, now)) {
+                Long cur = m.get(u.getPackageName());
+                if (cur == null || u.getLastTimeUsed() > cur) m.put(u.getPackageName(), u.getLastTimeUsed());
+            }
+            return m;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     // ------------------------------------------------------------------ memory
@@ -145,12 +172,8 @@ final class Booster {
         return m;
     }
 
-    /** 0 = relaxed (do nothing), 1 = tight (clean cold apps), 2 = critical (clean all but protected). */
-    static int level(ActivityManager.MemoryInfo m) {
-        float free = m.availMem / (float) m.totalMem;
-        if (m.lowMemory || free < 0.15f) return 2;
-        if (free < 0.35f || m.availMem < m.threshold * 2) return 1;
-        return 0;
+    int level(ActivityManager.MemoryInfo m) {
+        return Policy.level(m.availMem, m.totalMem, m.threshold, m.lowMemory, mode());
     }
 
     int usedPct() {
@@ -161,15 +184,42 @@ final class Booster {
     // ------------------------------------------------------------------ protection
 
     boolean hardProtected(String p) {
-        if (p.equals(ctx.getPackageName())) return true;
-        for (String h : HARD) if (p.equals(h)) return true;
-        String l = p.toLowerCase(Locale.US);
-        for (String k : KEYS) if (l.contains(k)) return true;
-        return false;
+        return p.equals(ctx.getPackageName()) || Policy.carCritical(p, labels.get(p));
+    }
+
+    void invalidateCarApps() { carApps = null; }
+
+    /**
+     * Phone-connection and car apps, found three ways: package name, app label, and - the reliable
+     * one - every app that handles a phone/USB device being plugged in (how wired CarPlay / Android
+     * Auto receivers like ZLINK, AutoKit, TLink... start). Cached for 10 minutes.
+     */
+    Set<String> carApps() {
+        Set<String> c = carApps;
+        if (c != null && SystemClock.elapsedRealtime() - carAppsAt < 10 * MIN) return c;
+        Set<String> s = new HashSet<>();
+        for (String action : new String[]{"android.hardware.usb.action.USB_DEVICE_ATTACHED",
+                "android.hardware.usb.action.USB_ACCESSORY_ATTACHED"}) {
+            android.content.Intent i = new android.content.Intent(action);
+            try { for (android.content.pm.ResolveInfo r : pm.queryIntentActivities(i, PackageManager.MATCH_ALL)) s.add(r.activityInfo.packageName); }
+            catch (Exception ignored) { }
+            try { for (android.content.pm.ResolveInfo r : pm.queryBroadcastReceivers(i, PackageManager.MATCH_ALL)) s.add(r.activityInfo.packageName); }
+            catch (Exception ignored) { }
+        }
+        try {
+            for (ApplicationInfo ai : pm.getInstalledApplications(0)) {
+                if (Policy.carCritical(ai.packageName, labels.get(ai.packageName))) s.add(ai.packageName);
+            }
+        } catch (Exception ignored) { }
+        s.remove(ctx.getPackageName());
+        carApps = s;
+        carAppsAt = SystemClock.elapsedRealtime();
+        return s;
     }
 
     Set<String> protectedSet(Set<String> dock, String player) {
         Set<String> p = set("boostNever");
+        p.addAll(carApps());
         if (keepDock() && dock != null) p.addAll(dock);
         if (player != null) p.add(player);
         try { for (MediaController c : msm.getActiveSessions(listenerCn)) p.add(c.getPackageName()); }
@@ -245,6 +295,7 @@ final class Booster {
         Set<String> running = deep ? running() : null;
         if (deep && running == null) deep = false; // ps failed: fall back to normal mode
         Set<String> prot = protectedSet(dock, player);
+        Map<String, Long> usage = level > 0 ? lastUsed() : null;
         List<ApplicationInfo> installed = pm.getInstalledApplications(0);
 
         if (deep) detectRespawns(running, installed, prot, now);
@@ -259,7 +310,7 @@ final class Booster {
             if (deep && blocked.contains(p)) { force.add(p); continue; }
             if (always.contains(p)) { kill.add(p); continue; }
             if (sys || level == 0) continue;               // system apps only via your own lists
-            if (level == 1 && warm(p, now)) continue;      // keep what you use ready
+            if (warm(p, now, level, manual, usage)) continue; // keep what you use ready
             kill.add(p);
         }
         if (kill.isEmpty() && force.isEmpty()) {

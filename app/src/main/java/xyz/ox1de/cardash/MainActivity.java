@@ -193,6 +193,7 @@ public class MainActivity extends Activity {
         ramTv.setOnLongClickListener(v -> { showOptimizer(); return true; });
         clockTv.setOnLongClickListener(v -> { showSaver(); return true; });
         ui.postDelayed(bootClean, 30_000); // after boot, once the head unit's own services have started
+        maybeResumeMusic();
         speedTv.setFontFeatureSettings("tnum"); // fixed-width digits: no jitter as speed changes
 
         artIv.setClipToOutline(true);
@@ -381,10 +382,49 @@ public class MainActivity extends Activity {
     final BroadcastReceiver pkgRx = new PkgRx();
     class PkgRx extends BroadcastReceiver {
         @Override public void onReceive(Context c, Intent i) {
-            appsLoaded = false;
-            loadApps(null);
+            Uri d = i.getData();
+            if (d == null) return;
+            // an update sends REMOVED(replacing) + ADDED: only the ADDED matters
+            if (Intent.ACTION_PACKAGE_REMOVED.equals(i.getAction()) && i.getBooleanExtra(Intent.EXTRA_REPLACING, false)) return;
+            pendingPkgs.add(d.getSchemeSpecificPart());
+            if (booster != null) booster.invalidateCarApps();
+            ui.removeCallbacks(pkgFlush);
+            ui.postDelayed(pkgFlush, 1500); // coalesce bursts into one refresh
         }
     };
+
+    final Set<String> pendingPkgs = new HashSet<>();
+    final Runnable pkgFlush = new PkgFlush();
+
+    /** Refresh only the packages that changed, instead of reloading every icon on the unit. */
+    class PkgFlush implements Runnable {
+        @Override public void run() {
+            final Set<String> pk = new HashSet<>(pendingPkgs);
+            pendingPkgs.clear();
+            if (!appsLoaded) { if (appsLoading) appsDirty = true; else loadApps(null); return; }
+            final String self = getPackageName();
+            bg.execute(() -> {
+                final Map<String, AppEntry> fresh = new HashMap<>();
+                for (String p : pk) {
+                    if (p.equals(self)) continue;
+                    Intent q = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setPackage(p);
+                    List<ResolveInfo> r = pm.queryIntentActivities(q, 0);
+                    if (!r.isEmpty()) fresh.put(p, entry(r.get(0)));
+                }
+                ui.post(() -> {
+                    for (int i = apps.size() - 1; i >= 0; i--) if (pk.contains(apps.get(i).pkg)) apps.remove(i);
+                    for (String p : pk) byPkg.remove(p);
+                    apps.addAll(fresh.values());
+                    byPkg.putAll(fresh);
+                    final Collator col = Collator.getInstance();
+                    Collections.sort(apps, (a, b) -> col.compare(a.label, b.label));
+                    gridAdapter.notifyDataSetChanged();
+                    buildDock();
+                    shareLabels();
+                });
+            });
+        }
+    }
 
     void registerReceivers() {
         IntentFilter t = new IntentFilter();
@@ -818,20 +858,33 @@ public class MainActivity extends Activity {
         appsLoading = true;
         appsDirty = false;
         final String self = getPackageName();
+        final Set<String> dockPk = dockSet();
+        final boolean first = apps.isEmpty();
         bg.execute(() -> {
             Intent i = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
             List<ResolveInfo> ris = pm.queryIntentActivities(i, 0);
+            final Map<String, AppEntry> done = new HashMap<>();
+            // 1) Dock first: on a cold boot the dock is usable after ~6 icons, not after all ~100.
+            if (first && !dockPk.isEmpty()) {
+                final List<AppEntry> quick = new ArrayList<>();
+                for (ResolveInfo ri : ris) {
+                    String pkg = ri.activityInfo.packageName;
+                    if (dockPk.contains(pkg) && !done.containsKey(pkg)) { AppEntry e = entry(ri); done.put(pkg, e); quick.add(e); }
+                }
+                ui.post(() -> {
+                    if (appsLoaded) return;
+                    for (AppEntry e : quick) byPkg.put(e.pkg, e);
+                    buildDock();
+                });
+            }
+            // 2) Everything else
             final List<AppEntry> out = new ArrayList<>();
             Set<String> seen = new HashSet<>();
             for (ResolveInfo ri : ris) {
                 String pkg = ri.activityInfo.packageName;
                 if (pkg.equals(self) || !seen.add(pkg)) continue;
-                AppEntry e = new AppEntry();
-                e.pkg = pkg;
-                e.label = String.valueOf(ri.loadLabel(pm));
-                e.sys = (ri.activityInfo.applicationInfo.flags & android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0;
-                try { e.icon = toBitmap(ri.loadIcon(pm)); } catch (Exception ignored) { }
-                out.add(e);
+                AppEntry e = done.get(pkg);
+                out.add(e != null ? e : entry(ri));
             }
             final Collator col = Collator.getInstance();
             Collections.sort(out, (a, b) -> col.compare(a.label, b.label));
@@ -844,6 +897,7 @@ public class MainActivity extends Activity {
                 appsLoading = false;
                 gridAdapter.notifyDataSetChanged();
                 buildDock();
+                shareLabels();
                 if (!needAccess && ctl == null) setT(appTv, playerLabel());
                 List<Runnable> run = new ArrayList<>(afterLoad);
                 afterLoad.clear();
@@ -851,6 +905,24 @@ public class MainActivity extends Activity {
                 if (appsDirty) { appsLoaded = false; loadApps(null); }
             });
         });
+    }
+
+    AppEntry entry(ResolveInfo ri) {
+        AppEntry e = new AppEntry();
+        e.pkg = ri.activityInfo.packageName;
+        e.label = String.valueOf(ri.loadLabel(pm));
+        e.sys = (ri.activityInfo.applicationInfo.flags & android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0;
+        try { e.icon = toBitmap(ri.loadIcon(pm)); } catch (Exception ignored) { }
+        return e;
+    }
+
+    /** Give the optimiser the app names, so "ZLINK", "Apple CarPlay", "手机互联" etc. are recognised by label too. */
+    void shareLabels() {
+        if (booster == null) return;
+        Map<String, String> m = new HashMap<>();
+        for (AppEntry e : apps) m.put(e.pkg, e.label);
+        booster.labels = m;
+        booster.invalidateCarApps();
     }
 
     Bitmap toBitmap(Drawable d) {
@@ -890,6 +962,7 @@ public class MainActivity extends Activity {
         if (!appsLoaded) loadApps(null);
         drawer.setAlpha(0f);
         drawer.setVisibility(View.VISIBLE);
+        drive.setActive(false); // hidden behind the drawer: don't animate it
         drawer.animate().alpha(1f).setDuration(140).withLayer().start();
     }
 
@@ -897,6 +970,7 @@ public class MainActivity extends Activity {
         if (drawer.getVisibility() != View.VISIBLE) return;
         drawer.animate().cancel();
         drawer.setVisibility(View.GONE);
+        drive.setActive(resumed && !saverOn);
         grid.setSelection(0);
     }
 
@@ -1085,6 +1159,9 @@ public class MainActivity extends Activity {
         labels.add("Speed alert:  " + (alert == 0 ? "off" : alert + " " + unit)); acts.add(this::pickAlert);
         labels.add("Screensaver:  " + (saverMin == 0 ? "off" : "after " + saverMin + " min idle")); acts.add(this::pickSaver);
         labels.add("RAM optimiser…");                                            acts.add(this::showOptimizer);
+        final boolean autoPlay = sp.getBoolean("autoPlay", false);
+        labels.add("Resume music after start:  " + (autoPlay ? "on" : "off"));
+        acts.add(() -> { sp.edit().putBoolean("autoPlay", !autoPlay).apply(); toast("Resume music after start: " + (!autoPlay ? "on" : "off")); });
         labels.add("Media access:  " + (listenerOk() ? "granted" : "tap to grant")); acts.add(this::openListenerSettings);
         labels.add("Location (speed):  " + (locOk ? "granted" : "tap to grant"));
         acts.add(() -> {
@@ -1253,6 +1330,21 @@ public class MainActivity extends Activity {
                     refreshTheme(false);
                 })
                 .show();
+    }
+
+    // ------------------------------------------------------------------ resume music after start
+
+    /** Opt-in. Once per boot: if nothing is playing ~8 s after start, press "play" for the last player. */
+    void maybeResumeMusic() {
+        if (!sp.getBoolean("autoPlay", false)) return;
+        long bootAt = System.currentTimeMillis() - SystemClock.elapsedRealtime();
+        if (Math.abs(sp.getLong("autoPlayBoot", 0) - bootAt) < 120_000) return; // already done this boot
+        sp.edit().putLong("autoPlayBoot", bootAt).apply();
+        ui.postDelayed(() -> {
+            if (ctl != null && isPlaying(ctl)) return;
+            if (ctl != null) ctl.getTransportControls().play();
+            else sendKey(KeyEvent.KEYCODE_MEDIA_PLAY); // Android routes this to the last music app, even if closed
+        }, 8000);
     }
 
     // ------------------------------------------------------------------ screensaver
@@ -1437,6 +1529,20 @@ public class MainActivity extends Activity {
         acts.add(() -> { sp.edit().putBoolean("boostAuto", !booster.autoOn()).apply(); showOptimizer(); });
         labels.add("Keep dock apps ready:  " + (booster.keepDock() ? "on" : "off"));
         acts.add(() -> { sp.edit().putBoolean("boostDock", !booster.keepDock()).apply(); showOptimizer(); });
+        labels.add("Strength:  " + (booster.mode() == Policy.BALANCED
+                ? "Balanced — acts below 30% free RAM" : "Gentle — acts below 20% free RAM (recommended)"));
+        acts.add(() -> {
+            sp.edit().putInt("boostMode", booster.mode() == Policy.BALANCED ? Policy.GENTLE : Policy.BALANCED).apply();
+            showOptimizer();
+        });
+        labels.add("Protected car & phone-link apps…");
+        acts.add(this::showCarApps);
+        final boolean ua = booster.usageAccess();
+        labels.add("Usage access:  " + (ua ? "granted — sees every app you open" : "off — tap to grant (smarter, optional)"));
+        acts.add(() -> {
+            if (ua || !tryStart(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)))
+                adbHint("Usage access", "adb shell appops set " + getPackageName() + " GET_USAGE_STATS allow");
+        });
         labels.add("Never stop…  (" + never.size() + ")");
         acts.add(() -> pickAppSet("Never stop these apps", "boostNever", false));
         labels.add("Always stop in background…  (" + always.size() + ")");
@@ -1461,6 +1567,39 @@ public class MainActivity extends Activity {
                 .setTitle("RAM  ·  " + mb(m.availMem) + " free of " + mb(m.totalMem))
                 .setItems(labels.toArray(new String[0]), (d, w) -> acts.get(w).run())
                 .show();
+    }
+
+    void adbHint(String what, String cmd) {
+        new AlertDialog.Builder(this, dlg())
+                .setTitle(what)
+                .setMessage("If this head unit hides the setting, grant it once from a computer:\n\n" + cmd)
+                .setPositiveButton("OK", (d, w) -> showOptimizer())
+                .show();
+    }
+
+    /** Lists everything the optimiser will never stop because a car or phone-link feature depends on it. */
+    void showCarApps() {
+        final Map<String, String> visible = new HashMap<>(); // snapshot on the UI thread
+        for (AppEntry e : apps) visible.put(e.pkg, e.label);
+        booster.ex.execute(() -> {
+            Set<String> s = booster.carApps();
+            final List<String> first = new ArrayList<>(), rest = new ArrayList<>();
+            for (String p : s) {
+                String l = visible.get(p);
+                if (l != null) { first.add(l); continue; }      // apps you can see in the drawer
+                String bgLabel = p;                             // services / system parts
+                try { bgLabel = String.valueOf(pm.getApplicationLabel(pm.getApplicationInfo(p, 0))); } catch (Exception ignored) { }
+                rest.add(bgLabel + "   (background)");
+            }
+            Collections.sort(first, String.CASE_INSENSITIVE_ORDER);
+            Collections.sort(rest, String.CASE_INSENSITIVE_ORDER);
+            first.addAll(rest);
+            ui.post(() -> new AlertDialog.Builder(this, dlg())
+                    .setTitle("Never stopped (" + first.size() + "): phone links, CarPlay / Android Auto, Bluetooth, cameras, CAN…")
+                    .setItems(first.toArray(new String[0]), null)
+                    .setPositiveButton("OK", (d, w) -> showOptimizer())
+                    .show());
+        });
     }
 
     /** Multi-select over installed apps, saved as a string set. */
