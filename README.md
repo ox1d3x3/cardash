@@ -1,7 +1,7 @@
 # CarDash
 
 A Tesla-style home screen for cheap Android head units. Built for a 2 GB RAM / Android 13 unit:
-framework-only Java, no AndroidX, no Kotlin, no web views. APK is ~90 KB.
+framework-only Java, no AndroidX, no Kotlin, no web views. APK is ~125 KB.
 
 ## What's on screen
 - **Drive panel**: GPS speed (tap to switch km/h ↔ mph), heading, GPS status, Wi-Fi indicator,
@@ -21,6 +21,12 @@ framework-only Java, no AndroidX, no Kotlin, no web views. APK is ~90 KB.
   Redraws once per second; the dashboard underneath stops drawing completely; the face drifts a few
   pixels each minute against image retention. Also available as Android's system screensaver
   ("CarDash Clock" under Display → Screen saver, if your unit has that menu).
+- **Two layouts** (*Settings → Layout*): **Standard** (default: car · music) or **Dash cam**
+  (car · live DDPAI front-camera tile · compact music player). Tap the tile for full screen: the
+  video moves over without reconnecting.
+- **Dash cam live view**: front = DDPAI over its Wi-Fi; rear = the reversing camera wired into the
+  head unit (Android camera API), or the head unit's own camera app if it doesn't share the camera.
+  Tap the car or the camera icon. See *Dash cam* below.
 - **RAM optimiser** (RAM % chip on the drive panel: tap = clean now, long-press = settings).
 - **Now playing**: album art, title/artist, progress, prev / play-pause / next. Controls whatever
   app is actually playing (AIMP, Spotify, radio apps, YouTube Music...).
@@ -68,6 +74,39 @@ framework-only Java, no AndroidX, no Kotlin, no web views. APK is ~90 KB.
 - The road animation pauses while the app drawer covers it.
 - Text views only update when the value actually changes (no per-second relayouts).
 - Clock uses the system `TIME_TICK` broadcast instead of a timer.
+
+## Dash cam (DDPAI) live view
+DDPAI cameras run a small server on their own Wi-Fi at `193.168.0.1` (reverse-engineered by the
+community: [hackaday.io project 167990](https://hackaday.io/project/167990),
+[awexandrr/ddpai-api](https://github.com/awexandrr/ddpai-api)). CarDash:
+
+1. Uses the camera if the head unit is already on its Wi-Fi; otherwise asks Android to join it
+   **for CarDash only** (one-time system prompt). Network name: auto (anything containing "DDPAI",
+   or what the last scan saw), password default `1234567890`; both editable in *Settings → Dash cam*.
+   When the view closes, Android puts the previous Wi-Fi back by itself.
+2. Logs in and switches the camera to live mode over its HTTP API (best effort; firmware varies).
+3. Plays `rtsp://193.168.0.1:554/liveRTSP/av4` (front) or `av5` (rear) with a built-in RTSP client
+   (RTP over the RTSP TCP connection: nothing for Wi-Fi to drop), falling back to the older raw H.264
+   stream on port 6200. Decoded by the head unit's hardware decoder straight to the screen; if the
+   decoder ever falls behind it skips to the next keyframe instead of building up delay.
+4. Reconnects on drops. Every step is logged: *Settings → Dash cam → Last connection log* (copyable).
+
+**Dash cam layout**: one camera session serves both the home tile and the full-screen view (the
+decoder's output surface is switched live with `MediaCodec.setOutputSurface`). It runs only while the
+home screen is visible: leaving home, or the screensaver, releases the camera Wi-Fi; coming back
+reconnects. If the DDPAI is off, the tile says so and quietly retries every minute.
+
+**Rear camera**: the head unit's AV-in / reversing camera through Camera2 (*Settings → Dash cam →
+Rear camera* lists what the unit exposes; camera permission is asked the first time). If the unit's
+own reverse screen is holding the camera, CarDash says so. Units that don't share the camera can use
+"Open the head unit's camera app instead".
+
+Things to know:
+- While the view is open, the head unit is on the camera's Wi-Fi, so a phone-hotspot internet
+  connection pauses, and wireless CarPlay may drop on some units. Close the view and it all returns.
+- The camera serves one app at a time: disconnect your phone's DDPAI app from it first.
+- Tested here against real RTSP servers (Digest/Basic auth, 480p / 1080p / 1440p, 25 s+ runs, keep-alive)
+  and a mock DDPAI API, but not yet on a Mini Pro 2K. If it doesn't play, the log says exactly where it stopped.
 
 ## RAM optimiser: what it really does
 Android already evicts cached apps when it needs memory, and stopping apps you'll reopen just makes

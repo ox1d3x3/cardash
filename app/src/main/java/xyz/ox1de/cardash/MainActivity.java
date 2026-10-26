@@ -113,6 +113,12 @@ public class MainActivity extends Activity {
     ClockView saver;
     View mainView;
     boolean saverOn, swallowTouch;
+    View camView, camBar, camBtn;
+    AspectFrame camFrame;
+    android.view.SurfaceView camSurface;
+    TextView camStatus, camInfo, camFront, camRear, camLive;
+    DashCam cam;
+    boolean camOpen, camRearOn, camHasFailed;
     boolean lastPlaying, lastMuteIcon, iconsInit;
     SimpleDateFormat clockFmt, dateFmt;
     String clockKey;
@@ -187,8 +193,10 @@ public class MainActivity extends Activity {
         ramTv = findViewById(R.id.ram);
         saver = findViewById(R.id.saver);
         mainView = findViewById(R.id.main);
+        camBtn = findViewById(R.id.camBtn);
         refreshTheme(true); // before the first frame, so there is never a wrong-theme flash
         booster = new Booster(this, sp, ui, listenerCn, new BoostL());
+        setupCam();
         ramTv.setOnClickListener(v -> manualClean());
         ramTv.setOnLongClickListener(v -> { showOptimizer(); return true; });
         clockTv.setOnLongClickListener(v -> { showSaver(); return true; });
@@ -259,6 +267,7 @@ public class MainActivity extends Activity {
         connectMedia();
         applyImmersive();
         drive.setActive(!saverOn);
+        updateCamSession(); // Dash cam layout: bring the tile back
         updateRam();
         ui.postDelayed(ramTick, 15_000);
         ui.postDelayed(homeClean, 1500);   // you just came back home: tidy up after the app you left
@@ -272,6 +281,8 @@ public class MainActivity extends Activity {
         resumed = false;
         drive.setActive(false);
         hideSaver();
+        closeCam(); // leaving home: give the Wi-Fi back
+        updateCamSession();
         ui.removeCallbacks(ramTick);
         ui.removeCallbacks(homeClean);
         ui.removeCallbacks(periodicClean);
@@ -299,10 +310,12 @@ public class MainActivity extends Activity {
         super.onNewIntent(i);
         hideDrawer(); // Home pressed while we're already on top
         hideSaver();
+        closeCam();
     }
 
     @Override
     public void onBackPressed() {
+        if (camOpen) { closeCam(); return; }
         if (drawer.getVisibility() == View.VISIBLE) hideDrawer();
         // a launcher never finishes on back
     }
@@ -330,6 +343,11 @@ public class MainActivity extends Activity {
 
     @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] res) {
+        if (code == 2) { // camera, for the rear view
+            boolean ok = res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED;
+            if (ok) startRear(); else if (camOpen && camRearOn) setCamStatus("Camera access was refused, so the rear view can't be shown.");
+            return;
+        }
         if (resumed) startLocation();
     }
 
@@ -340,10 +358,10 @@ public class MainActivity extends Activity {
         content.setOrientation(port ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
         drivePanel.setLayoutParams(port
                 ? new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 42f)
-                : new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 38f));
+                : new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, dashLayout() ? 34f : 38f));
         rightCol.setLayoutParams(port
                 ? new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 58f)
-                : new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 62f));
+                : new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, dashLayout() ? 66f : 62f));
     }
 
     @SuppressWarnings("deprecation")
@@ -477,6 +495,7 @@ public class MainActivity extends Activity {
         setT(clockTv, clockFmt.format(d));
         setT(dateTv, dateFmt.format(d));
         refreshTheme(false);
+        updateCamInfo();
     }
 
     // ------------------------------------------------------------------ speed (GPS)
@@ -545,6 +564,7 @@ public class MainActivity extends Activity {
     void renderSpeed(float ms) {
         lastSpeed = ms;
         drive.setSpeed(ms);
+        updateCamInfo();
         if (ms < 0) {
             setT(speedTv, "--");
             speedTv.setTextColor(look.text);
@@ -1159,6 +1179,8 @@ public class MainActivity extends Activity {
         labels.add("Speed alert:  " + (alert == 0 ? "off" : alert + " " + unit)); acts.add(this::pickAlert);
         labels.add("Screensaver:  " + (saverMin == 0 ? "off" : "after " + saverMin + " min idle")); acts.add(this::pickSaver);
         labels.add("RAM optimiser…");                                            acts.add(this::showOptimizer);
+        labels.add("Layout:  " + (dashLayout() ? "Dash cam" : "Standard"));       acts.add(this::pickLayout);
+        labels.add("Dash cam…");                                                 acts.add(this::showCamSettings);
         final boolean autoPlay = sp.getBoolean("autoPlay", false);
         labels.add("Resume music after start:  " + (autoPlay ? "on" : "off"));
         acts.add(() -> { sp.edit().putBoolean("autoPlay", !autoPlay).apply(); toast("Resume music after start: " + (!autoPlay ? "on" : "off")); });
@@ -1298,6 +1320,7 @@ public class MainActivity extends Activity {
 
         ColorStateList t1 = L.csl(L.text), t2 = L.csl(L.text2), ln = L.csl(L.line);
         wifiIv.setImageTintList(t2);
+        if (camBtn != null) { ((ImageButton) camBtn).setImageTintList(t2); camBtn.setBackground(L.rippleRect(dp(8))); }
         ((ImageButton) prevBtn).setImageTintList(t1);
         ((ImageButton) nextBtn).setImageTintList(t1);
         prevBtn.setBackground(L.rippleRound());
@@ -1332,6 +1355,518 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    // ------------------------------------------------------------------ dash cam
+    //
+    // One DashCam session is shared by the home-screen tile (Dash cam layout) and the full-screen
+    // view: opening/closing full screen just moves the decoder's output surface, no reconnect.
+    // Rear = the head unit's own camera input (RearCam), or an app you pick.
+
+    View camTile;
+    AspectFrame tileFrame, rearAspect;
+    android.view.SurfaceView tileSurface, rearSurface;
+    TextView tileStatus;
+    boolean fullReady, tileReady, camHalted, closingToTile, camPlayingNow;
+    RearCam rear;
+    String rearPendingId;
+    int rearW, rearH;
+
+    boolean dashLayout() { return sp.getInt("layout", 0) == 1; }
+
+    int rearMode() { return sp.getInt("rearMode", 1); } // 0 off, 1 head unit camera, 2 an app
+
+    void setupCam() {
+        camView = findViewById(R.id.cam);
+        camBar = findViewById(R.id.camBar);
+        camFrame = findViewById(R.id.camFrame);
+        camSurface = findViewById(R.id.camSurface);
+        camStatus = findViewById(R.id.camStatus);
+        camInfo = findViewById(R.id.camInfo);
+        camFront = findViewById(R.id.camFront);
+        camRear = findViewById(R.id.camRear);
+        camLive = findViewById(R.id.camLive);
+        camTile = findViewById(R.id.camTile);
+        tileFrame = findViewById(R.id.tileFrame);
+        tileSurface = findViewById(R.id.tileSurface);
+        tileStatus = findViewById(R.id.tileStatus);
+        rearAspect = findViewById(R.id.rearFrame);
+        rearSurface = findViewById(R.id.rearSurface);
+
+        android.graphics.drawable.GradientDrawable screen = new android.graphics.drawable.GradientDrawable();
+        screen.setColor(0xFF000000);
+        screen.setCornerRadius(dp(20));
+        screen.setStroke(Math.max(1, dp(1)), 0xFF23262C);
+        camTile.setBackground(screen);
+
+        camBtn.setOnClickListener(v -> openCam());
+        drive.setOnClickListener(v -> { if (sp.getBoolean("camTapCar", true)) openCam(); });
+        camTile.setOnClickListener(v -> openCam());
+        camTile.setOnLongClickListener(v -> { showCamSettings(); return true; });
+        findViewById(R.id.camClose).setOnClickListener(v -> closeCam());
+        camFront.setOnClickListener(v -> switchCam(false));
+        camRear.setOnClickListener(v -> switchCam(true));
+        camView.setOnClickListener(v -> toggleCamBar());
+        camStatus.setOnClickListener(v -> { if (camHasFailed) showCamLog(); else toggleCamBar(); });
+        camSurface.getHolder().addCallback(new SurfaceCb(0));
+        tileSurface.getHolder().addCallback(new SurfaceCb(1));
+        rearSurface.getHolder().addCallback(new SurfaceCb(2));
+        applyLayout();
+    }
+
+    class SurfaceCb implements android.view.SurfaceHolder.Callback {
+        final int which; // 0 full screen, 1 home tile, 2 rear
+        SurfaceCb(int w) { which = w; }
+
+        @Override public void surfaceCreated(android.view.SurfaceHolder h) {
+            if (which == 0) {
+                fullReady = true;
+                updateCamSession();                                         // video moves here
+                if (camOpen && !camRearOn) mainView.setVisibility(View.INVISIBLE); // now the tile can go
+            } else if (which == 1) {
+                tileReady = true;
+                updateCamSession();
+                if (closingToTile) finishClose();
+            } else {
+                startRear();
+            }
+        }
+
+        @Override public void surfaceChanged(android.view.SurfaceHolder h, int f, int w, int hh) {
+            if (which == 2) rearSurfaceChanged(w, hh);
+        }
+
+        @Override public void surfaceDestroyed(android.view.SurfaceHolder h) {
+            if (which == 2) { stopRear(); return; }
+            if (which == 0) fullReady = false; else tileReady = false;
+            updateCamSession(); // synchronously move the decoder off this surface before it dies
+        }
+    }
+
+    /** Start / stop / retarget the shared camera session to match what is on screen. */
+    void updateCamSession() {
+        if (camView == null) return;
+        boolean want = resumed && !saverOn && !camHalted
+                && (camOpen ? (!camRearOn || dashLayout()) : dashLayout());
+        if (!want) { stopCam(); return; }
+        android.view.Surface full = fullReady ? camSurface.getHolder().getSurface() : null;
+        android.view.Surface tile = tileReady && camTile.getVisibility() == View.VISIBLE ? tileSurface.getHolder().getSurface() : null;
+        android.view.Surface target = camOpen ? (camRearOn ? null : (full != null ? full : tile)) : (tile != null ? tile : full);
+        if (cam == null) startCam(target); else cam.setSurface(target);
+    }
+
+    void startCam(android.view.Surface target) {
+        camPlayingNow = false;
+        cam = new DashCam(this, sp, ui, new DashCam.Ui() {
+            @Override public void camStatus(String s) {
+                camPlayingNow = false;
+                setTileStatus(s);
+                if (camOpen && !camRearOn) { camHasFailed = false; camLive.setVisibility(View.GONE); setCamStatus(s); }
+            }
+            @Override public void camPlaying() {
+                camPlayingNow = true;
+                tileStatus.setVisibility(View.GONE);
+                if (camOpen && !camRearOn) {
+                    camStatus.setVisibility(View.GONE);
+                    camLive.setVisibility(View.VISIBLE);
+                    ui.removeCallbacks(hideCamBar);
+                    ui.postDelayed(hideCamBar, 4000);
+                }
+            }
+            @Override public void camFailed(String s) {
+                camPlayingNow = false;
+                camHalted = true;              // stop trying until retried (tile: automatically in a minute)
+                stopCam();                     // and give the Wi-Fi back meanwhile
+                setTileStatus("Dash cam offline\nRetrying in a minute · tap to open");
+                ui.removeCallbacks(camRetry);
+                ui.postDelayed(camRetry, 60_000);
+                if (camOpen && !camRearOn) {
+                    camHasFailed = true;
+                    camLive.setVisibility(View.GONE);
+                    camBar.animate().cancel();
+                    camBar.setAlpha(1f);
+                    camBar.setVisibility(View.VISIBLE);
+                    setCamStatus(s + "\nTap FRONT to retry.");
+                }
+            }
+            @Override public void camSize(int w, int h) {
+                camFrame.setAspect(w / (float) h);
+                tileFrame.setAspect(w / (float) h);
+            }
+        });
+        cam.start(target, false);
+    }
+
+    final Runnable camRetry = new CamRetry();
+    class CamRetry implements Runnable {
+        @Override public void run() { camHalted = false; updateCamSession(); }
+    }
+
+    void stopCam() {
+        if (cam != null) { cam.stop(); cam = null; }
+        camPlayingNow = false;
+    }
+
+    void setTileStatus(String s) {
+        tileStatus.setText(s.split("\n")[0]);
+        tileStatus.setVisibility(View.VISIBLE);
+    }
+
+    void openCam() {
+        if (camOpen) return;
+        if (!sp.getBoolean("camIntro", false)) { showCamIntro(this::openCam); return; }
+        camOpen = true;
+        camRearOn = false;
+        camHalted = false;
+        ui.removeCallbacks(camRetry);
+        hideDrawer();
+        ui.removeCallbacks(idleR);
+        drive.setActive(false);
+        camHasFailed = false;
+        camLive.setVisibility(camPlayingNow ? View.VISIBLE : View.GONE);
+        if (camPlayingNow) camStatus.setVisibility(View.GONE); else setCamStatus("Connecting…");
+        camRear.setVisibility(rearMode() != 0 ? View.VISIBLE : View.GONE);
+        camFrame.setVisibility(View.VISIBLE);
+        rearAspect.setVisibility(View.GONE);
+        paintCamChips();
+        camBar.animate().cancel();
+        camBar.setAlpha(1f);
+        camBar.setVisibility(View.VISIBLE);
+        if (camPlayingNow) { ui.removeCallbacks(hideCamBar); ui.postDelayed(hideCamBar, 4000); }
+        camView.setVisibility(View.VISIBLE);
+        // with a live tile, keep the dashboard until the video has moved to the full-screen surface
+        if (!(dashLayout() && tileReady && cam != null)) mainView.setVisibility(View.INVISIBLE);
+        updateCamInfo();
+        updateCamSession();
+    }
+
+    void closeCam() {
+        if (!camOpen) return;
+        camOpen = false;
+        camRearOn = false;
+        ui.removeCallbacks(hideCamBar);
+        stopRear();
+        mainView.setVisibility(View.VISIBLE);
+        drive.setActive(resumed && !saverOn);
+        if (resumed && dashLayout() && cam != null && !tileReady) {
+            closingToTile = true;           // keep showing video full screen until the tile surface exists
+            ui.postDelayed(finishCloseR, 800);
+        } else {
+            finishClose();
+        }
+        resetIdle();
+    }
+
+    final Runnable finishCloseR = new FinishClose();
+    class FinishClose implements Runnable { @Override public void run() { finishClose(); } }
+
+    void finishClose() {
+        ui.removeCallbacks(finishCloseR);
+        closingToTile = false;
+        if (camOpen) return;
+        camView.setVisibility(View.GONE);
+        updateCamSession();
+    }
+
+    void switchCam(boolean toRear) {
+        if (toRear && rearMode() == 2) {
+            String app = sp.getString("rearApp", null);
+            if (app != null) { closeCam(); launch(app); }
+            else toast("Choose the rear camera app in Settings → Dash cam");
+            return;
+        }
+        if (toRear == camRearOn) {
+            if (!toRear && camHasFailed) { // retry the dash cam
+                camHasFailed = false;
+                camHalted = false;
+                ui.removeCallbacks(camRetry);
+                setCamStatus("Connecting…");
+                stopCam();
+                updateCamSession();
+            }
+            return;
+        }
+        camRearOn = toRear;
+        paintCamChips();
+        camLive.setVisibility(View.GONE);
+        camHasFailed = false;
+        if (toRear) {
+            setCamStatus("Opening the rear camera…");
+            camFrame.setVisibility(View.GONE);      // dash cam keeps streaming (Dash cam layout) or stops
+            rearAspect.setVisibility(View.VISIBLE);  // surfaceCreated -> startRear()
+        } else {
+            stopRear();
+            rearAspect.setVisibility(View.GONE);
+            camFrame.setVisibility(View.VISIBLE);
+            if (camPlayingNow) camStatus.setVisibility(View.GONE); else setCamStatus("Connecting…");
+            updateCamSession();
+        }
+    }
+
+    // ---- rear: head unit camera
+
+    String rearCamId() {
+        List<String[]> l = RearCam.list(this);
+        if (l.isEmpty()) return null;
+        String id = sp.getString("rearCamId", null);
+        if (id != null) for (String[] c : l) if (c[0].equals(id)) return id;
+        return l.get(0)[0];
+    }
+
+    void startRear() {
+        if (!camOpen || !camRearOn || rear != null) return;
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            setCamStatus("Allow camera access to see the rear camera.");
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, 2);
+            return;
+        }
+        final String id = rearCamId();
+        if (id == null) {
+            setCamStatus("This head unit doesn't share its camera with apps.\nPick its camera app instead: Settings → Dash cam → Rear camera.");
+            return;
+        }
+        rear = new RearCam(this, ui, new RearCam.Cb() {
+            @Override public void rearStatus(String s) { if (camOpen && camRearOn) setCamStatus(s); }
+            @Override public void rearPlaying() {
+                if (!camOpen || !camRearOn) return;
+                camStatus.setVisibility(View.GONE);
+                camLive.setVisibility(View.VISIBLE);
+                ui.removeCallbacks(hideCamBar);
+                ui.postDelayed(hideCamBar, 4000);
+            }
+            @Override public void rearSize(int w, int h) { rearAspect.setAspect(w / (float) h); }
+        });
+        android.util.Size sz = rear.sizeFor(id);
+        android.graphics.Rect cur = rearSurface.getHolder().getSurfaceFrame();
+        if (sz == null || (cur.width() == sz.getWidth() && cur.height() == sz.getHeight())) {
+            if (sz != null) rearAspect.setAspect(sz.getWidth() / (float) sz.getHeight());
+            rear.start(id, rearSurface.getHolder().getSurface());
+            return;
+        }
+        // camera buffers must match the surface size: resize it, then start in surfaceChanged()
+        rearAspect.setAspect(sz.getWidth() / (float) sz.getHeight());
+        rearW = sz.getWidth();
+        rearH = sz.getHeight();
+        rearPendingId = id;
+        rearSurface.getHolder().setFixedSize(rearW, rearH);
+        ui.postDelayed(rearStartFallback, 800);
+    }
+
+    void rearSurfaceChanged(int w, int h) {
+        if (rear != null && rearPendingId != null && w == rearW && h == rearH) startPendingRear();
+    }
+
+    final Runnable rearStartFallback = new RearFallback();
+    class RearFallback implements Runnable { @Override public void run() { startPendingRear(); } }
+
+    void startPendingRear() {
+        ui.removeCallbacks(rearStartFallback);
+        String id = rearPendingId;
+        rearPendingId = null;
+        if (rear != null && id != null && camOpen && camRearOn) rear.start(id, rearSurface.getHolder().getSurface());
+    }
+
+    void stopRear() {
+        ui.removeCallbacks(rearStartFallback);
+        rearPendingId = null;
+        if (rear != null) { rear.stop(); rear = null; }
+    }
+
+    // ---- view chrome
+
+    void paintCamChips() {
+        chip(camFront, !camRearOn);
+        chip(camRear, camRearOn);
+    }
+
+    void chip(TextView t, boolean on) {
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+        g.setCornerRadius(dp(20));
+        g.setColor(on ? 0xFFF2F3F5 : 0x33FFFFFF);
+        t.setBackground(g);
+        t.setTextColor(on ? 0xFF07080A : 0xFFF2F3F5);
+    }
+
+    void setCamStatus(String s) {
+        camStatus.setText(s);
+        camStatus.setVisibility(View.VISIBLE);
+    }
+
+    final Runnable hideCamBar = new HideCamBar();
+    class HideCamBar implements Runnable {
+        @Override public void run() { if (camOpen && !camHasFailed) camBar.animate().alpha(0f).setDuration(250).withEndAction(() -> camBar.setVisibility(View.INVISIBLE)).start(); }
+    }
+
+    void toggleCamBar() {
+        ui.removeCallbacks(hideCamBar);
+        if (camBar.getVisibility() != View.VISIBLE) {
+            camBar.animate().cancel();
+            camBar.setAlpha(1f);
+            camBar.setVisibility(View.VISIBLE);
+            ui.postDelayed(hideCamBar, 4000);
+        } else {
+            hideCamBar.run();
+        }
+    }
+
+    void updateCamInfo() {
+        if (!camOpen || camInfo == null) return;
+        String spd = lastSpeed < 0 ? "" : Math.round(lastSpeed * (mph() ? 2.23694f : 3.6f)) + (mph() ? " MPH" : " KM/H") + "   ·   ";
+        setT(camInfo, spd + clockTv.getText());
+    }
+
+    // ---- layout: Standard (default) / Dash cam
+
+    void applyLayout() {
+        boolean dash = dashLayout();
+        camTile.setVisibility(dash ? View.VISIBLE : View.GONE);
+        LinearLayout.LayoutParams mlp = (LinearLayout.LayoutParams) mediaCard.getLayoutParams();
+        mlp.weight = dash ? 36 : 1;
+        mediaCard.setLayoutParams(mlp);
+        // compact player under the camera tile
+        int pad = dp(dash ? 12 : 16);
+        mediaCard.setPadding(pad, pad, pad, pad);
+        appTv.setVisibility(dash ? View.GONE : View.VISIBLE);
+        ((View) posTv.getParent()).setVisibility(dash ? View.GONE : View.VISIBLE);
+        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, dash ? 18 : 22);
+        artistTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, dash ? 14 : 15);
+        ((LinearLayout.LayoutParams) prog.getLayoutParams()).topMargin = dp(dash ? 8 : 16);
+        sizeBtn(prevBtn, dash ? 44 : 54, 0);
+        sizeBtn(nextBtn, dash ? 44 : 54, 0);
+        sizeBtn(playBtn, dash ? 52 : 64, dash ? 14 : 22);
+        playBtn.setPadding(dp(dash ? 14 : 17), dp(dash ? 14 : 17), dp(dash ? 14 : 17), dp(dash ? 14 : 17));
+        ((LinearLayout.LayoutParams) ((View) playBtn.getParent()).getLayoutParams()).topMargin = dp(dash ? 4 : 8);
+        mediaCard.requestLayout();
+        applyOrientation(getResources().getConfiguration());
+        updateCamSession();
+    }
+
+    void sizeBtn(View b, int sizeDp, int sideMarginDp) {
+        LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) b.getLayoutParams();
+        lp.width = lp.height = dp(sizeDp);
+        if (sideMarginDp > 0) { lp.leftMargin = lp.rightMargin = dp(sideMarginDp); lp.setMarginStart(dp(sideMarginDp)); lp.setMarginEnd(dp(sideMarginDp)); }
+        b.setLayoutParams(lp);
+    }
+
+    void setLayoutMode(int l) {
+        if (l == 1 && !sp.getBoolean("camIntro", false)) { showCamIntro(() -> setLayoutMode(1)); return; }
+        sp.edit().putInt("layout", l).apply();
+        camHalted = false;
+        applyLayout();
+    }
+
+    void pickLayout() {
+        String[] names = {"Standard  (car · music)", "Dash cam  (car · live front camera · music)"};
+        new AlertDialog.Builder(this, dlg())
+                .setTitle("Home screen layout")
+                .setSingleChoiceItems(names, dashLayout() ? 1 : 0, (d, w) -> { d.dismiss(); setLayoutMode(w); })
+                .show();
+    }
+
+    void showCamIntro(final Runnable then) {
+        boolean both = DashCam.staConcurrency(getSystemService(android.net.wifi.WifiManager.class));
+        new AlertDialog.Builder(this, dlg())
+                .setTitle("Dash cam live view")
+                .setMessage("CarDash joins the DDPAI's own Wi-Fi while its picture is on screen (the full view, or the "
+                        + "home screen in Dash cam layout), the same way the DDPAI phone app does. "
+                        + (both ? "This head unit can stay on your normal Wi-Fi at the same time."
+                                : "On this head unit, other Wi-Fi (like a phone hotspot) pauses meanwhile, and wireless CarPlay may drop.")
+                        + " It's released whenever you leave the home screen.\n\nThe first time, Android asks you to allow the "
+                        + "connection. Make sure your phone isn't connected to the camera at the same time.")
+                .setPositiveButton("Continue", (d, w) -> { sp.edit().putBoolean("camIntro", true).apply(); then.run(); })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    // ---- settings
+
+    void showCamLog() {
+        final String log = sp.getString("camLog", "No connection attempts yet.");
+        new AlertDialog.Builder(this, dlg())
+                .setTitle("Dash cam connection log")
+                .setMessage(log)
+                .setPositiveButton("Close", null)
+                .setNeutralButton("Copy", (d, w) -> {
+                    android.content.ClipboardManager cbm = getSystemService(android.content.ClipboardManager.class);
+                    if (cbm != null) cbm.setPrimaryClip(android.content.ClipData.newPlainText("CarDash dash cam log", log));
+                    toast("Log copied");
+                })
+                .show();
+    }
+
+    String rearLabel() {
+        int m = rearMode();
+        if (m == 0) return "off";
+        if (m == 2) { String a = sp.getString("rearApp", null); return a == null ? "an app (not chosen)" : "open " + labelOf(a); }
+        String id = rearCamId();
+        return id == null ? "head unit camera (none found)" : "head unit camera " + id;
+    }
+
+    void pickRearSource() {
+        final List<String[]> cams = RearCam.list(this);
+        final List<String> labels = new ArrayList<>();
+        final List<Runnable> acts = new ArrayList<>();
+        String cur = rearMode() == 1 ? rearCamId() : null;
+        for (final String[] c : cams) {
+            labels.add("Head unit " + c[1] + (c[0].equals(cur) ? "   ✓" : ""));
+            acts.add(() -> { sp.edit().putInt("rearMode", 1).putString("rearCamId", c[0]).apply(); showCamSettings(); });
+        }
+        if (cams.isEmpty()) { labels.add("(this head unit doesn't share a camera with apps)"); acts.add(this::pickRearSource); }
+        labels.add("Open the head unit's camera app instead…" + (rearMode() == 2 ? "   ✓" : ""));
+        acts.add(() -> pickApp("Rear camera app", sp.getString("rearApp", null), false, p -> {
+            if (p != null) sp.edit().putInt("rearMode", 2).putString("rearApp", p).apply();
+            showCamSettings();
+        }));
+        labels.add("Off" + (rearMode() == 0 ? "   ✓" : ""));
+        acts.add(() -> { sp.edit().putInt("rearMode", 0).apply(); showCamSettings(); });
+        new AlertDialog.Builder(this, dlg())
+                .setTitle("Rear camera (wired to the head unit)")
+                .setItems(labels.toArray(new String[0]), (d, w) -> acts.get(w).run())
+                .show();
+    }
+
+    void showCamSettings() {
+        final String ssid = sp.getString("camSsid", ""), seen = sp.getString("camSsidSeen", ""), model = sp.getString("camModel", "");
+        final boolean smooth = sp.getBoolean("camSmooth", true), tapCar = sp.getBoolean("camTapCar", true);
+        final List<String> labels = new ArrayList<>();
+        final List<Runnable> acts = new ArrayList<>();
+        labels.add("Open live view");
+        acts.add(this::openCam);
+        labels.add("Home screen layout:  " + (dashLayout() ? "Dash cam" : "Standard"));
+        acts.add(this::pickLayout);
+        labels.add("Rear camera:  " + rearLabel());
+        acts.add(this::pickRearSource);
+        labels.add("DDPAI Wi-Fi name:  " + (!ssid.isEmpty() ? ssid : !seen.isEmpty() ? "auto (" + seen + ")" : "auto (any name containing DDPAI)"));
+        acts.add(() -> editText("DDPAI Wi-Fi name (leave empty for automatic)", ssid, v -> { sp.edit().putString("camSsid", v.trim()).apply(); showCamSettings(); }));
+        labels.add("DDPAI Wi-Fi password:  " + sp.getString("camPass", "1234567890"));
+        acts.add(() -> editText("DDPAI Wi-Fi password (default 1234567890)", sp.getString("camPass", "1234567890"),
+                v -> { sp.edit().putString("camPass", v.trim()).apply(); showCamSettings(); }));
+        labels.add("Quality:  " + (smooth ? "Smooth (camera's preview stream)" : "Full resolution"));
+        acts.add(() -> { sp.edit().putBoolean("camSmooth", !smooth).apply(); showCamSettings(); });
+        labels.add("Tap the car to open:  " + (tapCar ? "on" : "off"));
+        acts.add(() -> { sp.edit().putBoolean("camTapCar", !tapCar).apply(); showCamSettings(); });
+        labels.add("Last connection log…" + (model.isEmpty() ? "" : "   (last camera: " + model + ")"));
+        acts.add(this::showCamLog);
+        new AlertDialog.Builder(this, dlg())
+                .setTitle("Dash cam  ·  DDPAI front + head unit rear")
+                .setItems(labels.toArray(new String[0]), (d, w) -> acts.get(w).run())
+                .show();
+    }
+
+    void editText(String title, String value, java.util.function.Consumer<String> done) {
+        final android.widget.EditText e = new android.widget.EditText(this);
+        e.setSingleLine(true);
+        e.setText(value);
+        e.setSelection(e.getText().length());
+        android.widget.FrameLayout box = new android.widget.FrameLayout(this);
+        box.setPadding(dp(24), dp(8), dp(24), 0);
+        box.addView(e);
+        new AlertDialog.Builder(this, dlg())
+                .setTitle(title)
+                .setView(box)
+                .setPositiveButton("Save", (d, w) -> done.accept(e.getText().toString()))
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
     // ------------------------------------------------------------------ resume music after start
 
     /** Opt-in. Once per boot: if nothing is playing ~8 s after start, press "play" for the last player. */
@@ -1354,7 +1889,7 @@ public class MainActivity extends Activity {
     final Runnable idleR = new IdleR();
     class IdleR implements Runnable {
         @Override public void run() {
-            if (!resumed || saverOn) return;
+            if (!resumed || saverOn || camOpen) return;
             if (drawer.getVisibility() == View.VISIBLE || lastSpeed > 2.8f) { // drawer open / driving: wait
                 ui.postDelayed(this, 30_000);
                 return;
@@ -1416,6 +1951,7 @@ public class MainActivity extends Activity {
         saver.setAlpha(0f);
         saver.setVisibility(View.VISIBLE);
         saver.start();
+        updateCamSession(); // no camera streaming behind the screensaver
         saver.animate().alpha(1f).setDuration(700).withLayer()
                 .withEndAction(() -> { if (saverOn) mainView.setVisibility(View.INVISIBLE); }) // nothing drawn underneath
                 .start();
@@ -1431,6 +1967,7 @@ public class MainActivity extends Activity {
         saver.setVisibility(View.GONE);
         drive.setActive(resumed);
         if (resumed) renderState(); // restart the progress ticker
+        updateCamSession();
         resetIdle();
     }
 

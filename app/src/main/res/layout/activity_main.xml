@@ -63,6 +63,18 @@
                         android:textColor="@color/text3"
                         android:textSize="11sp" />
 
+                    <ImageButton
+                        android:id="@+id/camBtn"
+                        android:layout_width="34dp"
+                        android:layout_height="28dp"
+                        android:layout_marginEnd="8dp"
+                        android:background="@drawable/ripple_rect"
+                        android:contentDescription="Dash cam"
+                        android:padding="5dp"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/ic_videocam"
+                        android:tint="@color/text2" />
+
                     <ImageView
                         android:id="@+id/wifi"
                         android:layout_width="18dp"
@@ -156,6 +168,66 @@
                 android:layout_height="match_parent"
                 android:layout_weight="62"
                 android:orientation="vertical">
+
+                <!-- Dash cam layout only: live front camera tile -->
+                <FrameLayout
+                    android:id="@+id/camTile"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_marginBottom="12dp"
+                    android:layout_weight="64"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:visibility="gone">
+
+                    <xyz.ox1de.cardash.AspectFrame
+                        android:id="@+id/tileFrame"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:padding="6dp">
+
+                        <SurfaceView
+                            android:id="@+id/tileSurface"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent" />
+                    </xyz.ox1de.cardash.AspectFrame>
+
+                    <TextView
+                        android:id="@+id/tileLabel"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="top|start"
+                        android:layout_margin="14dp"
+                        android:fontFamily="sans-serif-medium"
+                        android:letterSpacing="0.12"
+                        android:shadowColor="#CC000000"
+                        android:shadowRadius="5"
+                        android:text="FRONT"
+                        android:textColor="#FFF2F3F5"
+                        android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/tileStatus"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="center"
+                        android:gravity="center"
+                        android:lineSpacingExtra="3dp"
+                        android:paddingLeft="16dp"
+                        android:paddingRight="16dp"
+                        android:text="Connecting to the dash cam…"
+                        android:textColor="#FF8B919A"
+                        android:textSize="13sp" />
+
+                    <ImageView
+                        android:id="@+id/tileExpand"
+                        android:layout_width="22dp"
+                        android:layout_height="22dp"
+                        android:layout_gravity="bottom|end"
+                        android:layout_margin="14dp"
+                        android:alpha="0.85"
+                        android:src="@drawable/ic_fullscreen" />
+                </FrameLayout>
 
                 <LinearLayout
                     android:id="@+id/media"
@@ -392,4 +464,143 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:visibility="gone" />
+
+    <!-- ============ DASH CAM ============ -->
+    <FrameLayout
+        android:id="@+id/cam"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#FF000000"
+        android:clickable="true"
+        android:focusable="true"
+        android:visibility="gone">
+
+        <xyz.ox1de.cardash.AspectFrame
+            android:id="@+id/camFrame"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent">
+
+            <SurfaceView
+                android:id="@+id/camSurface"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+        </xyz.ox1de.cardash.AspectFrame>
+
+        <!-- rear: the head unit's own camera input -->
+        <xyz.ox1de.cardash.AspectFrame
+            android:id="@+id/rearFrame"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone">
+
+            <SurfaceView
+                android:id="@+id/rearSurface"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+        </xyz.ox1de.cardash.AspectFrame>
+
+        <TextView
+            android:id="@+id/camStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:background="@drawable/bg_cam_status"
+            android:gravity="center"
+            android:lineSpacingExtra="4dp"
+            android:maxWidth="560dp"
+            android:paddingLeft="22dp"
+            android:paddingTop="14dp"
+            android:paddingRight="22dp"
+            android:paddingBottom="14dp"
+            android:textColor="#FFF2F3F5"
+            android:textSize="16sp" />
+
+        <LinearLayout
+            android:id="@+id/camBar"
+            android:layout_width="match_parent"
+            android:layout_height="72dp"
+            android:layout_gravity="top"
+            android:background="@drawable/bg_cam_bar"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingLeft="12dp"
+            android:paddingRight="16dp">
+
+            <ImageButton
+                android:id="@+id/camClose"
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:background="@drawable/ripple_round"
+                android:contentDescription="Close"
+                android:padding="14dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_close" />
+
+            <TextView
+                android:id="@+id/camTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:fontFamily="sans-serif-medium"
+                android:letterSpacing="0.14"
+                android:text="DASH CAM"
+                android:textColor="#FFF2F3F5"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/camLive"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:fontFamily="sans-serif-medium"
+                android:letterSpacing="0.12"
+                android:text="\u25CF LIVE"
+                android:textColor="#FFFF4D4F"
+                android:textSize="12sp"
+                android:visibility="gone" />
+
+            <Space
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+
+            <TextView
+                android:id="@+id/camFront"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:fontFamily="sans-serif-medium"
+                android:gravity="center"
+                android:letterSpacing="0.1"
+                android:paddingLeft="18dp"
+                android:paddingRight="18dp"
+                android:text="FRONT"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/camRear"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:layout_marginStart="8dp"
+                android:fontFamily="sans-serif-medium"
+                android:gravity="center"
+                android:letterSpacing="0.1"
+                android:paddingLeft="18dp"
+                android:paddingRight="18dp"
+                android:text="REAR"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/camInfo"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|start"
+            android:layout_margin="18dp"
+            android:fontFamily="sans-serif-medium"
+            android:letterSpacing="0.08"
+            android:shadowColor="#CC000000"
+            android:shadowRadius="6"
+            android:textColor="#FFF2F3F5"
+            android:textSize="16sp" />
+    </FrameLayout>
 </FrameLayout>

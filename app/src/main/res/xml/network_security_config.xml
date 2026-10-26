@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Plain HTTP is allowed only to the dash cam's own local address (it has no HTTPS). -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">193.168.0.1</domain>
+    </domain-config>
+</network-security-config>
