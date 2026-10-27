@@ -325,7 +325,7 @@ final class SleepyCat {
             c.drawPath(path, line);
         }
         c.save();
-        c.translate(0, -34);
+        c.translate(0, -32);
         drawHead(c, 15.5f, false, a);
         c.restore();
     }
@@ -352,66 +352,74 @@ final class SleepyCat {
             float cs = (float) Math.cos(r), sn = (float) Math.sin(r);
             c.drawLine(cs * R * 0.55f, sn * R * 0.55f, cs * R * 0.93f, sn * R * 0.93f, line);
         }
-        // front paws under the chin, head resting on them
-        oval(c, R * 0.62f, -R * 0.12f, 5.5f, 6.5f, SOCK, a);
-        oval(c, R * 0.3f, -R * 0.42f, 5.5f, 6.5f, SOCK, a);
+        // front paws under the chin, head resting on them with its nose tucked towards the tail tip
+        oval(c, R * 0.86f, -R * 0.08f, 5.5f, 6.5f, SOCK, a);
+        oval(c, R * 0.98f, -R * 0.36f, 5.5f, 6.5f, SOCK, a);
         c.save();
-        c.translate(R * 0.42f, -R * 0.62f);
-        c.rotate(31.5f);
+        c.translate(R * 0.4f, -R * 0.56f);
+        c.rotate(128.9f);
         drawHead(c, 15, true, a);
         c.restore();
     }
 
-    /** Head at the origin, facing -y: ears, fur, forehead "M", muzzle, nose, eyes, whiskers. */
+    /**
+     * Head at the origin, seen from above, facing -y: ears out to the front-sides, tabby marks
+     * running back over the top, the muzzle and nose sticking out in front, eyes just visible on
+     * the front edge beside the muzzle, whiskers out to the sides.
+     */
     void drawHead(Canvas c, float r, boolean asleep, int a) {
         for (int sd = -1; sd <= 1; sd += 2) {
             fill.setShader(null);
             fill.setColor(EAR);
             fill.setAlpha(a);
             path.rewind();
-            path.moveTo(sd * r * 0.95f, -r * 0.15f);
-            path.quadTo(sd * r * 1.15f, -r * 1.05f, sd * r * 1.02f, -r * 1.45f);
-            path.quadTo(sd * r * 0.55f, -r * 1.15f, sd * r * 0.25f, -r * 0.85f);
+            path.moveTo(sd * r * 0.38f, -r * 0.68f);
+            path.quadTo(sd * r * 1.05f, -r * 1.12f, sd * r * 1.32f, -r * 0.95f);
+            path.quadTo(sd * r * 1.25f, -r * 0.3f, sd * r * 0.92f, -r * 0.02f);
             path.close();
             c.drawPath(path, fill);
             fill.setColor(EAR_IN);
             fill.setAlpha(a);
             path.rewind();
-            path.moveTo(sd * r * 0.85f, -r * 0.35f);
-            path.quadTo(sd * r * 0.98f, -r * 0.95f, sd * r * 0.92f, -r * 1.2f);
-            path.quadTo(sd * r * 0.6f, -r * 1.0f, sd * r * 0.42f, -r * 0.8f);
+            path.moveTo(sd * r * 0.55f, -r * 0.6f);
+            path.quadTo(sd * r * 1.0f, -r * 0.92f, sd * r * 1.16f, -r * 0.84f);
+            path.quadTo(sd * r * 1.1f, -r * 0.38f, sd * r * 0.88f, -r * 0.18f);
             path.close();
             c.drawPath(path, fill);
         }
+        oval(c, 0, -r * 0.92f, r * 0.46f, r * 0.36f, FUR_LIGHT, a);   // muzzle, under the head's front edge
         fur.setShader(headSh);
         fur.setAlpha(a);
         c.save();
-        c.scale(r / 15.5f, r / 15.5f);
+        c.scale(r / 15.5f, r / 15.5f * 0.94f);
         c.drawCircle(0, 0, 15.5f, fur);
         c.restore();
-        stroke(STRIPE, r * 0.13f, a);
+        oval(c, 0, -r * 0.92f, r * 0.4f, r * 0.28f, FUR_LIGHT, a);    // ...and its top, over it
+        oval(c, 0, -r * 1.18f, r * 0.12f, r * 0.08f, NOSE, a);
+        stroke(STRIPE, r * 0.12f, a);
         for (int i = -1; i <= 1; i++) {
-            float sx = i * 0.32f;
-            c.drawLine(sx * r, -r * 0.82f, sx * r * 0.85f, -r * 0.42f, line);
+            float sx = i * 0.3f;
+            c.drawLine(sx * r * 0.8f, -r * 0.5f, sx * r * 1.15f, r * 0.25f, line);
         }
-        oval(c, 0, r * 0.42f, r * 0.42f, r * 0.3f, FUR_LIGHT, a);
-        oval(c, 0, r * 0.3f, r * 0.13f, r * 0.09f, NOSE, a);
-        if (asleep) {
-            stroke(EYE, r * 0.1f, a);
-            for (int sd = -1; sd <= 1; sd += 2) {
+        for (int sd = -1; sd <= 1; sd += 2) {
+            if (asleep) {
+                stroke(EYE, r * 0.09f, a);
                 path.rewind();
-                path.moveTo(sd * r * 0.55f, -r * 0.02f);
-                path.quadTo(sd * r * 0.38f, r * 0.16f, sd * r * 0.2f, -r * 0.02f);
+                path.moveTo(sd * r * 0.62f, -r * 0.62f);
+                path.quadTo(sd * r * 0.5f, -r * 0.74f, sd * r * 0.34f, -r * 0.72f);
                 c.drawPath(path, line);
+            } else {
+                c.save();
+                c.translate(sd * r * 0.5f, -r * 0.7f);
+                c.rotate(sd * 28.6f);
+                oval(c, 0, 0, r * 0.14f, r * 0.075f, EYE, a);
+                c.restore();
             }
-        } else {
-            oval(c, -r * 0.38f, -r * 0.05f, r * 0.13f, r * 0.17f, EYE, a);
-            oval(c, r * 0.38f, -r * 0.05f, r * 0.13f, r * 0.17f, EYE, a);
         }
-        stroke(0xBFFFFFFF, 0.9f, a);
+        stroke(0xCCFFFFFF, 0.9f, a);
         for (int sd = -1; sd <= 1; sd += 2)
             for (int i = -1; i <= 1; i++)
-                c.drawLine(sd * r * 0.45f, r * 0.42f, sd * r * 1.25f, r * (0.32f + 0.16f * i), line);
+                c.drawLine(sd * r * 0.3f, -r * 0.95f, sd * r * 1.25f, -r * (1.05f + 0.14f * i), line);
     }
 
     /** Three z's drifting up from the sleeping head, each fading in and out. */

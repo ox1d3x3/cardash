@@ -3,6 +3,14 @@
 All notable changes to CarDash. Versions follow `MAJOR.MINOR[.PATCH]`; pre-releases are tagged
 `vX.Y-betaN`. Each `## vX.Y` section below becomes the notes of the matching GitHub release.
 
+## v2.9.1 — 2026-10-27
+
+### Fixed
+- **Sleepy cat drawn properly from above**: its face was drawn as if it were looking up at the
+  camera (eyes on top of its head). Now the ears sit at the front-sides, tabby marks run back over
+  the top of the head, the muzzle and nose stick out in front with the eyes just visible on the
+  front edge, and when it sleeps it tucks its nose towards its tail.
+
 ## v2.9 — 2026-10-27
 
 ### Changed
