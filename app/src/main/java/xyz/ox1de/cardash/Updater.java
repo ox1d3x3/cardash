@@ -48,7 +48,8 @@ final class Updater {
     static final String PAGE = "https://github.com/" + REPO + "/releases";
     static final long AUTO_EVERY = 6 * 3600_000L;
 
-    static final int MODE_OFF = 0, MODE_ASK = 1, MODE_AUTO = 2;
+    /** What happens when a check finds a newer release. */
+    static final int ACT_NOTIFY = 0, ACT_DOWNLOAD = 1, ACT_AUTO = 2;
 
     static final class Release {
         String tag, name, notes, apkUrl, pageUrl;
@@ -86,12 +87,26 @@ final class Updater {
 
     // ------------------------------------------------------------------ settings
 
-    int mode() { return sp.getInt("updMode", MODE_AUTO); }
+    /** Check GitHub automatically every 6 hours. On by default. */
+    boolean autoCheck() { migrate(); return sp.getBoolean("updCheck", true); }
+
+    /** ACT_NOTIFY (default): show the yellow update icon, download + install when it's tapped. */
+    int action() { migrate(); return sp.getInt("updAction", ACT_NOTIFY); }
+
+    /** v2.4 - v2.6 stored one "updMode" (0 off, 1 download + ask, 2 install when parked). */
+    private void migrate() {
+        if (!sp.contains("updMode")) return;
+        int m = sp.getInt("updMode", 2);
+        SharedPreferences.Editor e = sp.edit().remove("updMode");
+        if (m == 0) e.putBoolean("updCheck", false);
+        else e.putInt("updAction", m == 1 ? ACT_DOWNLOAD : ACT_AUTO);
+        e.apply();
+    }
 
     boolean beta() { return sp.getBoolean("updBeta", false); }
 
     boolean dueForAutoCheck() {
-        return mode() != MODE_OFF && System.currentTimeMillis() - sp.getLong("updLast", 0) > AUTO_EVERY;
+        return autoCheck() && System.currentTimeMillis() - sp.getLong("updLast", 0) > AUTO_EVERY;
     }
 
     String installedName() {

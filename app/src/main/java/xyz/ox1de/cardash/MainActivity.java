@@ -157,6 +157,14 @@ public class MainActivity extends Activity {
 
     MediaController ctl;
     Bitmap artBmp;
+    long artSig;   // fingerprint of the picture on screen: players re-send the same art several times per track
+    int artGen;
+    /** Album art is scaled to the card's size and colour-picked here, never on the UI thread. */
+    final ExecutorService artEx = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "art");
+        t.setPriority(Thread.MIN_PRIORITY + 1);
+        return t;
+    });
     long duration;
     boolean needAccess, resumed, locating, draggingVol, receiversOn;
     long lastFix;
@@ -234,6 +242,7 @@ public class MainActivity extends Activity {
         updater = new Updater(this, sp, ui, this::onUpdateState);
         InstallReceiver.active = updater;
         updChip.setOnClickListener(v -> showUpdateDialog());
+        styleUpdChip();
         Anim.press(updChip, 0.9f);
         String ver = updater.installedName(), lastVer = sp.getString("lastVer", null);
         if (lastVer != null && !lastVer.equals(ver)) ui.postDelayed(() -> toast("Updated to CarDash " + ver), 1500);
@@ -397,6 +406,7 @@ public class MainActivity extends Activity {
         try { cm.unregisterNetworkCallback(netCb); } catch (Exception ignored) { }
         ui.removeCallbacksAndMessages(null);
         bg.shutdownNow();
+        artEx.shutdownNow();
         updater.ex.shutdown();
         if (InstallReceiver.active == updater) InstallReceiver.active = null;
     }
@@ -433,6 +443,7 @@ public class MainActivity extends Activity {
         super.onTrimMemory(level);
         if (level >= TRIM_MEMORY_UI_HIDDEN && !resumed) {
             artBmp = null;
+            artSig = 0;
             artIv.setImageDrawable(null); // re-bound on resume
         }
     }
@@ -881,13 +892,13 @@ public class MainActivity extends Activity {
 
     void renderMeta() {
         if (widgetView != null) return; // the app's widget is showing the track: nothing to draw here
-        if (needAccess) { setArt(null); return; }
+        if (needAccess) { loadArt(null, false); return; }
         MediaMetadata m = ctl == null ? null : ctl.getMetadata();
         setT(appTv, ctl == null ? playerLabel() : labelOf(ctl.getPackageName()));
         if (m == null) {
             setT(titleTv, ctl == null ? "Nothing playing" : "—");
             setT(artistTv, ctl == null ? "Press play to start " + playerLabel() : "");
-            setArt(null);
+            loadArt(null, false);
             duration = 0;
             return;
         }
@@ -902,17 +913,13 @@ public class MainActivity extends Activity {
         Bitmap b = m.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART);
         if (b == null) b = m.getBitmap(MediaMetadata.METADATA_KEY_ART);
         if (b == null) b = m.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON);
-        boolean artArrived = artBmp == null && b != null; // some players send the art a moment after the title
-        setArt(b);
-        if (resumed && !saverOn) {
-            // next track: title + artist slide in, art grows in (GPU-only property animations)
-            if (newTrack) {
-                float d = dp(lastSkipBack ? -18 : 18);
-                Anim.slideIn(titleTv, d, 0);
-                Anim.slideIn(artistTv, d, 50);
-                lastSkipBack = false;
-            }
-            if (newTrack || artArrived) Anim.growIn(artIv);
+        loadArt(b, newTrack);
+        if (resumed && !saverOn && newTrack) {
+            // next track: title + artist slide in now; the art grows in when it's ready (GPU-only animations)
+            float d = dp(lastSkipBack ? -18 : 18);
+            Anim.slideIn(titleTv, d, 0);
+            Anim.slideIn(artistTv, d, 50);
+            lastSkipBack = false;
         }
         duration = m.getLong(MediaMetadata.METADATA_KEY_DURATION);
         if (saverOn) saver.setNowPlaying(nowPlayingLine());
@@ -926,7 +933,61 @@ public class MainActivity extends Activity {
         return null;
     }
 
-    void setArt(Bitmap b) {
+    /**
+     * Players send big art (Spotify 640 px, some 1000 px+) and re-send it with every metadata update.
+     * Off the UI thread: copy hardware bitmaps, fingerprint, scale to the size it's shown at, pick its
+     * colour. Back on the UI thread only a new picture is applied: one small texture upload per track,
+     * so the track-change animation never stutters.
+     */
+    void loadArt(final Bitmap b, final boolean newTrack) {
+        final int g = ++artGen;
+        if (b == null) {
+            if (artBmp != null || artSig != -1) { artSig = -1; setArt(null); }
+            return;
+        }
+        final int target = Math.max(dp(140), artIv.getHeight());
+        artEx.execute(() -> {
+            Bitmap small;
+            long sig;
+            int tint;
+            try {
+                Bitmap src = b;
+                if (Build.VERSION.SDK_INT >= 26 && src.getConfig() == Bitmap.Config.HARDWARE) src = src.copy(Bitmap.Config.ARGB_8888, false);
+                sig = artSignature(src);
+                int w = src.getWidth(), h = src.getHeight(), m = Math.max(w, h);
+                small = m > target * 1.2f ? Bitmap.createScaledBitmap(src, Math.max(1, w * target / m), Math.max(1, h * target / m), true) : src;
+                tint = artColor(small);
+            } catch (Throwable t) {
+                small = b;
+                sig = System.identityHashCode(b);
+                tint = 0;
+            }
+            final Bitmap fs = small;
+            final long fsig = sig;
+            final int ftint = tint;
+            ui.post(() -> {
+                if (g != artGen) return;                       // a newer track got here first
+                if (fsig == artSig && artBmp != null) return;  // the same picture again: nothing to redraw
+                boolean arrived = artBmp == null;              // some players send the art a moment after the title
+                artSig = fsig;
+                showArt(fs, ftint);
+                if (resumed && !saverOn && (newTrack || arrived)) Anim.growIn(artIv);
+            });
+        });
+    }
+
+    /** Size + 16 sampled pixels: tells "same picture re-sent" from "new picture" without comparing it all. */
+    static long artSignature(Bitmap b) {
+        int w = b.getWidth(), h = b.getHeight();
+        long sig = w * 31L + h;
+        for (int i = 1; i <= 4; i++) for (int j = 1; j <= 4; j++)
+            sig = sig * 1_000_003L ^ b.getPixel(w * i / 5, h * j / 5);
+        return sig == 0 || sig == -1 ? 1 : sig;
+    }
+
+    void setArt(Bitmap b) { showArt(b, b == null ? 0 : artColor(b)); }
+
+    void showArt(Bitmap b, int tint) {
         if (b != null && b == artBmp) return;
         artBmp = b;
         if (b == null) {
@@ -938,7 +999,7 @@ public class MainActivity extends Activity {
             artIv.setScaleType(ImageView.ScaleType.CENTER_CROP);
             artIv.setImageBitmap(b);
         }
-        artTint = b == null ? 0 : artColor(b);
+        artTint = tint;
         applyMediaTint();
     }
 
@@ -1537,6 +1598,7 @@ public class MainActivity extends Activity {
             buildDock();
         });
         labels.add("Android settings");                                          acts.add(() -> startSafe(new Intent(Settings.ACTION_SETTINGS)));
+        labels.add("About CarDash  ·  v" + updater.installedName());              acts.add(this::showAbout);
         new AlertDialog.Builder(this, dlg())
                 .setTitle("CarDash")
                 .setItems(labels.toArray(new String[0]), (d, w) -> acts.get(w).run())
@@ -1684,7 +1746,51 @@ public class MainActivity extends Activity {
         int mode = themeMode();
         boolean light = mode == 3 || (mode < 2 && !night);
         Look want = light ? Look.LIGHT : Look.DARK;
-        if (want != look || force) applyTheme(want);
+        if (want == look && !force) return;
+        if (!force && look != null && resumed && !saverOn) crossfadeTheme(want);
+        else applyTheme(want);
+    }
+
+    boolean themeFading;
+
+    /**
+     * 6 pm / 5 am (or a theme change in settings): instead of an instant colour swap, the old screen
+     * fades away over the new one. One GPU read-back of the window (PixelCopy), a full-screen image on
+     * top for 0.6 s, then it's freed. Falls back to the instant swap if anything is unavailable.
+     */
+    void crossfadeTheme(final Look want) {
+        final ViewGroup decor = (ViewGroup) getWindow().getDecorView();
+        final int w = decor.getWidth(), h = decor.getHeight();
+        if (themeFading || w == 0 || h == 0) { applyTheme(want); return; }
+        final Bitmap shot;
+        try { shot = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888); }
+        catch (Throwable t) { applyTheme(want); return; }
+        themeFading = true;
+        try {
+            android.view.PixelCopy.request(getWindow(), shot, result -> {
+                if (result != android.view.PixelCopy.SUCCESS || isDestroyed()) {
+                    themeFading = false;
+                    shot.recycle();
+                    applyTheme(want);
+                    return;
+                }
+                final ImageView cover = new ImageView(this);
+                cover.setImageBitmap(shot);
+                cover.setScaleType(ImageView.ScaleType.FIT_XY);
+                decor.addView(cover, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                applyTheme(want);
+                cover.animate().alpha(0f).setStartDelay(80).setDuration(620).setInterpolator(Anim.OUT).withEndAction(() -> {
+                    decor.removeView(cover);
+                    cover.setImageDrawable(null);
+                    shot.recycle();
+                    themeFading = false;
+                }).start();
+            }, ui);
+        } catch (Throwable t) {
+            themeFading = false;
+            shot.recycle();
+            applyTheme(want);
+        }
     }
 
     void applyTheme(Look L) {
@@ -1723,14 +1829,7 @@ public class MainActivity extends Activity {
         volTxt.setTextColor(L.text2);
         gpsTv.setTextColor(L.text3);
         if (ramTv != null) { ramTv.setTextColor(L.text3); ramTv.setBackground(L.rippleRect(dp(8))); }
-        if (updChip != null) {
-            android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
-            g.setCornerRadius(dp(14));
-            g.setColor((L.accent & 0x00FFFFFF) | (L.light ? 0x22000000 : 0x33000000));
-            g.setStroke(Math.max(1, dp(1)), (L.accent & 0x00FFFFFF) | 0x88000000);
-            updChip.setBackground(g);
-            updChip.setTextColor(L.accent);
-        }
+
         headingTv.setTextColor(L.text3);
         greetName.setTextColor(L.text);
         greetLabel.setTextColor(greetUser().isEmpty() ? L.accent : L.text2);
@@ -3042,7 +3141,7 @@ public class MainActivity extends Activity {
         v.animate().cancel();
         v.setAlpha(0f);
         v.setTranslationY(dp(10));
-        v.animate().alpha(1f).translationY(0f).setStartDelay(delay).setDuration(560).setInterpolator(Anim.OUT).withLayer().start();
+        v.animate().alpha(1f).translationY(0f).setStartDelay(delay).setDuration(560).setInterpolator(Anim.OUT).start();
     }
 
     /** @param morph cross-fade from the text that's showing now */
@@ -3053,9 +3152,9 @@ public class MainActivity extends Activity {
             greetWelcome = welcome;
             greetPhrase = phrase;
             greetLabel.animate().cancel();
-            greetLabel.animate().alpha(0f).translationY(-dp(6)).setStartDelay(0).setDuration(200).setInterpolator(Anim.OUT).withLayer().start();
+            greetLabel.animate().alpha(0f).translationY(-dp(6)).setStartDelay(0).setDuration(200).setInterpolator(Anim.OUT).start();
             greetName.animate().cancel();
-            greetName.animate().alpha(0f).translationY(-dp(6)).setStartDelay(30).setDuration(200).setInterpolator(Anim.OUT).withLayer()
+            greetName.animate().alpha(0f).translationY(-dp(6)).setStartDelay(30).setDuration(200).setInterpolator(Anim.OUT)
                     .withEndAction(() -> {   // both are faded out by now: swap the words, rise back in
                         if (!greetShown) return;
                         applyGreetingText(welcome, phrase, user);
@@ -3149,21 +3248,27 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------------ updates (GitHub Releases)
 
-    static final String[] UPD_MODES = {"Off", "Download, then ask me", "Install automatically when parked"};
+    static final String[] UPD_ACTIONS = {
+            "Show the yellow update icon (tap it to download & install)",
+            "Download in the background, then ask",
+            "Install automatically when parked"};
+    static final int UPD_YELLOW = 0xFFFFC21A, UPD_INK = 0xFF231A00;
+    static final String DEV_NAME = "Mahabub Subhany", DEV_HANDLE = "ox1d3x3";
+    static final String REPO_URL = "https://github.com/" + Updater.REPO, DEV_URL = "https://github.com/" + DEV_HANDLE;
 
     final Runnable updCheckR = new UpdCheck();
     class UpdCheck implements Runnable {
-        @Override public void run() { if (resumed) updater.check(updater.mode() != Updater.MODE_OFF, null); }
+        @Override public void run() { if (resumed) updater.check(updater.action() != Updater.ACT_NOTIFY, null); }
     }
 
-    /** Automatic mode: installs once the car has been parked a while and nothing is in the way. */
+    /** "Install automatically when parked": installs once the car is parked and nothing is in the way. */
     final Runnable updInstallR = new UpdInstall();
     class UpdInstall implements Runnable {
         @Override public void run() {
-            if (!resumed || updater.state != Updater.State.READY || updater.mode() != Updater.MODE_AUTO) return;
+            if (!resumed || updater.state != Updater.State.READY || updater.action() != Updater.ACT_AUTO) return;
             Updater.Release r = updater.release;
             if (r == null || r.tag.equals(updAutoTried)) return;
-            if (!rootUpdates() && !updater.canInstallWithoutRoot()) return;   // needs the one-time permission: chip waits for a tap
+            if (!rootUpdates() && !updater.canInstallWithoutRoot()) return;   // needs the one-time permission: the icon waits for a tap
             boolean parked = lastSpeed < 0.5f && !camOpen && !drawerOpen && !isFinishing();
             if (!parked) { ui.postDelayed(this, 30_000); return; }
             updAutoTried = r.tag;
@@ -3181,81 +3286,183 @@ public class MainActivity extends Activity {
             case READY: return v + "  ·  " + r.tag + " ready to install";
             case AVAILABLE: return v + "  ·  " + r.tag + " available";
             case DOWNLOADING: return v + "  ·  downloading " + updater.progress + "%";
-            default: return v + "  ·  " + UPD_MODES[updater.mode()].toLowerCase(Locale.ROOT);
+            default: return v + "  ·  " + (updater.autoCheck() ? "checks automatically" : "automatic check off");
         }
+    }
+
+    /** The yellow update icon: amber pill, dark ink, the same in both themes so it always stands out. */
+    void styleUpdChip() {
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+        g.setCornerRadius(dp(14));
+        g.setColor(UPD_YELLOW);
+        updChip.setBackground(new android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(0x33000000), g, null));
+        updChip.setTextColor(UPD_INK);
+        Drawable ic = getDrawable(R.drawable.ic_update).mutate();
+        ic.setTint(UPD_INK);
+        int sz = dp(14);
+        ic.setBounds(0, 0, sz, sz);
+        updChip.setCompoundDrawablesRelative(ic, null, null, null);
+        updChip.setCompoundDrawablePadding(dp(5));
     }
 
     void onUpdateState() {
         Updater.Release r = updater.release;
         String chip = null;
         switch (updater.state) {
-            case AVAILABLE: chip = "\u2191 " + r.tag; break;
-            case DOWNLOADING: chip = "\u2191 " + updater.progress + "%"; break;
-            case READY: chip = "\u2191 " + r.tag + "  INSTALL"; break;
-            case INSTALLING: chip = "INSTALLING\u2026"; break;
+            case AVAILABLE: chip = "UPDATE  " + r.tag; break;
+            case DOWNLOADING: chip = r.tag + "  " + updater.progress + "%"; break;
+            case READY: chip = "INSTALL  " + r.tag; break;
+            case INSTALLING: chip = "INSTALLING…"; break;
+            case FAILED: if (r != null) chip = "UPDATE  " + r.tag; break; // a failed download: tap to retry
             default: break;
         }
         if (chip == null) {
-            if (updChip.getVisibility() == View.VISIBLE) updChip.animate().alpha(0f).setStartDelay(0).setDuration(200)
-                    .withEndAction(() -> updChip.setVisibility(View.GONE)).start();
+            if (updChip.getVisibility() == View.VISIBLE) updChip.animate().alpha(0f).scaleX(0.85f).scaleY(0.85f).setStartDelay(0)
+                    .setDuration(200).withLayer().withEndAction(() -> updChip.setVisibility(View.GONE)).start();
         } else {
             setT(updChip, chip);
             if (updChip.getVisibility() != View.VISIBLE) {
                 updChip.setAlpha(0f);
-                updChip.setScaleX(0.8f);
-                updChip.setScaleY(0.8f);
+                updChip.setScaleX(0.6f);
+                updChip.setScaleY(0.6f);
                 updChip.setVisibility(View.VISIBLE);
-                updChip.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(320).setInterpolator(Anim.POP).start();
+                // pops in, then two soft pulses to catch the eye, then sits still (no endless animation)
+                updChip.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(380).setInterpolator(Anim.POP).withLayer()
+                        .withEndAction(() -> pulse(updChip, 2)).start();
+            }
+            // tell once per release when it was found in the background
+            if (r != null && !updManual && (updater.state == Updater.State.AVAILABLE || updater.state == Updater.State.READY)
+                    && !r.tag.equals(sp.getString("updToldTag", ""))) {
+                sp.edit().putString("updToldTag", r.tag).apply();
+                toast("CarDash " + r.tag + " is available: tap the yellow icon to update");
             }
         }
         if (updater.state == Updater.State.READY) {
             if (updInstallWhenReady) { updInstallWhenReady = false; installUpdate(); }
-            else if (updater.mode() == Updater.MODE_AUTO) { ui.removeCallbacks(updInstallR); ui.postDelayed(updInstallR, 20_000); }
+            else if (updater.action() == Updater.ACT_AUTO) { ui.removeCallbacks(updInstallR); ui.postDelayed(updInstallR, 20_000); }
         }
-        // a dialog the user opened follows along
-        if (updDlg != null && updDlg.isShowing()) {
-            if (updater.state == Updater.State.DOWNLOADING) updDlg.setMessage("Downloading " + (r != null ? r.tag : "") + "…  " + updater.progress + "%");
-            else if (updManual && updater.state != Updater.State.CHECKING) { updDlg.dismiss(); updManual = false; showCheckResult(); }
+        if (updManual && checkDlg != null && checkDlg.isShowing() && updater.state != Updater.State.CHECKING) {
+            checkDlg.dismiss();
+            updManual = false;
+            showCheckResult();
         }
+        refreshUpdateDialog();
+    }
+
+    void pulse(final View v, final int times) {
+        if (times <= 0 || v.getVisibility() != View.VISIBLE) return;
+        v.animate().scaleX(1.12f).scaleY(1.12f).setStartDelay(260).setDuration(220).setInterpolator(Anim.OUT)
+                .withEndAction(() -> v.animate().scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(320).setInterpolator(Anim.SOFT)
+                        .withEndAction(() -> pulse(v, times - 1)).start()).start();
     }
 
     void showCheckResult() {
         switch (updater.state) {
             case UP_TO_DATE: toast("You're on the latest version (v" + updater.installedName() + ")"); break;
             case FAILED:
-                new AlertDialog.Builder(this, dlg()).setTitle("Update check failed").setMessage(updater.error)
-                        .setPositiveButton("OK", null).show();
-                break;
+                if (updater.release == null) {
+                    new AlertDialog.Builder(this, dlg()).setTitle("Update check failed").setMessage(updater.error)
+                            .setPositiveButton("OK", null).show();
+                    break;
+                }
+                // fall through: a release is known, show it
             default: showUpdateDialog();
         }
     }
 
+    // ---- the update dialog: notes, a progress bar while downloading, one button that does the next step
+
+    AlertDialog checkDlg;
+    ProgressBar updBar;
+    TextView updStatus;
+
     void showUpdateDialog() {
         final Updater.Release r = updater.release;
-        if (r == null || updater.state == Updater.State.UP_TO_DATE || updater.state == Updater.State.IDLE) { showUpdates(); return; }
-        String notes = r.notes.isEmpty() ? "" : "\n\n" + r.notes;
-        AlertDialog.Builder b = new AlertDialog.Builder(this, dlg())
-                .setTitle("CarDash " + r.tag + (r.pre ? " (beta)" : "") + (updater.state == Updater.State.READY ? " is ready" : " is available"))
-                .setNeutralButton("Later", null);
+        if (r == null || updater.state == Updater.State.UP_TO_DATE || updater.state == Updater.State.IDLE
+                || updater.state == Updater.State.CHECKING) { showUpdates(); return; }
+        if (updDlg != null && updDlg.isShowing()) updDlg.dismiss();
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(24), dp(4), dp(24), 0);
+        updStatus = new TextView(this);
+        updStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        updStatus.setTextColor(look.text2);
+        box.addView(updStatus);
+        updBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        updBar.setMax(100);
+        updBar.setProgressTintList(android.content.res.ColorStateList.valueOf(UPD_YELLOW));
+        LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(8));
+        bl.topMargin = dp(10);
+        box.addView(updBar, bl);
+        if (!r.notes.isEmpty()) {
+            TextView notes = new TextView(this);
+            notes.setText(r.notes);
+            notes.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            notes.setTextColor(look.text);
+            notes.setLineSpacing(0, 1.15f);
+            android.widget.ScrollView sv = new android.widget.ScrollView(this);
+            sv.addView(notes);
+            LinearLayout.LayoutParams nl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    Math.min(dp(300), Math.round(getResources().getDisplayMetrics().heightPixels * 0.42f)));
+            nl.topMargin = dp(12);
+            box.addView(sv, nl);
+        }
+        updDlg = new AlertDialog.Builder(this, dlg())
+                .setTitle("CarDash " + r.tag + (r.pre ? "  (beta)" : ""))
+                .setView(box)
+                .setPositiveButton("Download & install", null)   // wired below: the dialog stays open while it downloads
+                .setNeutralButton("Later", null)
+                .create();
+        updDlg.setOnShowListener(d -> {
+            updDlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> updatePrimary());
+            refreshUpdateDialog();
+        });
+        final TextView mine = updStatus;
+        updDlg.setOnDismissListener(d -> { if (updStatus == mine) { updBar = null; updStatus = null; } });
+        updDlg.show();
+    }
+
+    /** The dialog's main button: download, then install, or retry. */
+    void updatePrimary() {
         switch (updater.state) {
             case READY:
-                b.setMessage("You have v" + updater.installedName() + "." + notes).setPositiveButton("Install now", (d, w) -> installUpdate());
+                installUpdate();
                 break;
-            case DOWNLOADING:
-                b.setMessage("Downloading…  " + updater.progress + "%" + notes);
-                updInstallWhenReady = true;
-                break;
-            case INSTALLING:
-                b.setMessage("Installing…");
-                break;
+            case AVAILABLE:
             case FAILED:
-                b.setMessage(updater.error + notes).setPositiveButton("Try again", (d, w) -> { updInstallWhenReady = true; updater.download(); });
+                updInstallWhenReady = true;   // install as soon as the download is verified
+                updater.download();
                 break;
             default:
-                b.setMessage("You have v" + updater.installedName() + "." + notes)
-                        .setPositiveButton("Download & install", (d, w) -> { updInstallWhenReady = true; updater.download(); });
+                break;
         }
-        updDlg = b.show();
+    }
+
+    void refreshUpdateDialog() {
+        if (updDlg == null || !updDlg.isShowing() || updStatus == null) return;
+        Updater.Release r = updater.release;
+        android.widget.Button b = updDlg.getButton(AlertDialog.BUTTON_POSITIVE);
+        String mine = "v" + updater.installedName();
+        String status;
+        String btn = null;
+        boolean bar = false;
+        switch (updater.state) {
+            case DOWNLOADING: status = "Downloading " + (r != null ? r.tag : "") + "…  " + updater.progress + "%"; bar = true; break;
+            case READY: status = mine + " installed  ·  " + (r != null ? r.tag : "update") + " downloaded and verified"; btn = "Install now"; break;
+            case INSTALLING: status = "Installing…"; bar = true; break;
+            case FAILED: status = updater.error; btn = "Try again"; break;
+            case AVAILABLE: status = mine + " installed  ·  " + (r != null ? r.tag : "a new version") + " is available"; btn = "Download & install"; break;
+            default: status = mine; break;
+        }
+        updStatus.setText(status);
+        updBar.setVisibility(bar ? View.VISIBLE : View.GONE);
+        updBar.setIndeterminate(updater.state == Updater.State.INSTALLING);
+        if (bar) updBar.setProgress(updater.progress);
+        if (b != null) {
+            b.setVisibility(btn == null ? View.GONE : View.VISIBLE);
+            if (btn != null) b.setText(btn);
+        }
     }
 
     void installUpdate() {
@@ -3263,7 +3470,7 @@ public class MainActivity extends Activity {
             new AlertDialog.Builder(this, dlg())
                     .setTitle("Allow CarDash to install updates")
                     .setMessage("Android asks for this once: switch on \"Allow from this source\" for CarDash, then come back "
-                            + "and tap the update chip (or Settings → Updates) again.")
+                            + "and tap the yellow update icon again.")
                     .setPositiveButton("Open setting", (d, w) -> {
                         if (!tryStart(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()))))
                             startSafe(new Intent(Settings.ACTION_SECURITY_SETTINGS));
@@ -3279,11 +3486,11 @@ public class MainActivity extends Activity {
 
     void checkUpdatesNow() {
         updManual = true;
-        updDlg = new AlertDialog.Builder(this, dlg()).setTitle("Updates").setMessage("Checking GitHub for a newer version…")
+        checkDlg = new AlertDialog.Builder(this, dlg()).setTitle("Updates").setMessage("Checking GitHub for a newer version…")
                 .setNegativeButton("Cancel", (d, w) -> updManual = false).show();
         updater.check(false, () -> {
-            if (updManual && updDlg != null && updDlg.isShowing() && updater.state != Updater.State.CHECKING) {
-                updDlg.dismiss();
+            if (updManual && checkDlg != null && checkDlg.isShowing() && updater.state != Updater.State.CHECKING) {
+                checkDlg.dismiss();
                 updManual = false;
                 showCheckResult();
             }
@@ -3291,11 +3498,13 @@ public class MainActivity extends Activity {
     }
 
     void showUpdates() {
-        final int mode = updater.mode();
+        final boolean auto = updater.autoCheck();
+        final int act = updater.action();
         final boolean beta = updater.beta();
         String[] items = {
                 "Check for updates now",
-                "Automatic updates:  " + UPD_MODES[mode],
+                "Check automatically (every 6 hours):  " + (auto ? "on" : "off"),
+                "When there's an update:  " + UPD_ACTIONS[act],
                 "Beta versions (pre-releases):  " + (beta ? "on" : "off"),
                 "All releases on GitHub"};
         new AlertDialog.Builder(this, dlg())
@@ -3304,23 +3513,117 @@ public class MainActivity extends Activity {
                     switch (w) {
                         case 0: checkUpdatesNow(); break;
                         case 1:
-                            new AlertDialog.Builder(this, dlg()).setTitle("Automatic updates (checked every 6 hours)")
-                                    .setSingleChoiceItems(UPD_MODES, mode, (dd, ww) -> {
-                                        sp.edit().putInt("updMode", ww).apply();
-                                        dd.dismiss();
-                                        if (ww != Updater.MODE_OFF) updater.check(true, null);
-                                    }).show();
+                            sp.edit().putBoolean("updCheck", !auto).apply();
+                            toast("Automatic update check: " + (!auto ? "on" : "off"));
+                            if (!auto) updater.check(updater.action() != Updater.ACT_NOTIFY, null);
                             break;
                         case 2:
+                            new AlertDialog.Builder(this, dlg()).setTitle("When a new version is found")
+                                    .setSingleChoiceItems(UPD_ACTIONS, act, (dd, ww) -> {
+                                        sp.edit().putInt("updAction", ww).putBoolean("updCheck", true).apply();
+                                        dd.dismiss();
+                                        if (ww != Updater.ACT_NOTIFY) updater.check(true, null);
+                                    }).show();
+                            break;
+                        case 3:
                             sp.edit().putBoolean("updBeta", !beta).apply();
                             toast("Beta versions: " + (!beta ? "on" : "off"));
-                            updater.check(updater.mode() != Updater.MODE_OFF, null);
+                            updater.check(updater.action() != Updater.ACT_NOTIFY, null);
                             break;
                         default:
                             startSafe(new Intent(Intent.ACTION_VIEW, Uri.parse(Updater.PAGE)));
                     }
                 })
                 .show();
+    }
+
+    // ------------------------------------------------------------------ about
+
+    void showAbout() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(24), dp(20), dp(24), dp(4));
+
+        LinearLayout head = new LinearLayout(this);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView icon = new ImageView(this);
+        icon.setImageDrawable(getApplicationInfo().loadIcon(pm));
+        head.addView(icon, new LinearLayout.LayoutParams(dp(56), dp(56)));
+        LinearLayout names = new LinearLayout(this);
+        names.setOrientation(LinearLayout.VERTICAL);
+        names.setPadding(dp(16), 0, 0, 0);
+        TextView name = new TextView(this);
+        name.setText("CarDash");
+        name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+        name.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+        name.setTextColor(look.text);
+        names.addView(name);
+        TextView ver = new TextView(this);
+        ver.setText("Version " + updater.installedName());
+        ver.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        ver.setTextColor(look.text2);
+        names.addView(ver);
+        head.addView(names);
+        box.addView(head);
+
+        TextView blurb = new TextView(this);
+        blurb.setText("A lightweight, Tesla-style home screen for Android car head units.");
+        blurb.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        blurb.setTextColor(look.text2);
+        blurb.setPadding(0, dp(16), 0, dp(8));
+        box.addView(blurb);
+
+        box.addView(aboutRow("Dev", DEV_NAME + " (" + DEV_HANDLE + ")", DEV_URL));
+        box.addView(aboutRow("Source code", "github.com/" + Updater.REPO, REPO_URL));
+        final boolean auto = updater.autoCheck();
+        box.addView(aboutRow("Check for updates", auto ? "On  ·  every 6 hours (tap to turn off)" : "Off  (tap to turn on)", null,
+                v -> {
+                    boolean now = !updater.autoCheck();
+                    sp.edit().putBoolean("updCheck", now).apply();
+                    ((TextView) ((ViewGroup) v).getChildAt(1)).setText(now ? "On  ·  every 6 hours (tap to turn off)" : "Off  (tap to turn on)");
+                    if (now) updater.check(updater.action() != Updater.ACT_NOTIFY, null);
+                }));
+
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.addView(box);
+        new AlertDialog.Builder(this, dlg())
+                .setView(sv)
+                .setPositiveButton("Check for updates", (d, w) -> checkUpdatesNow())
+                .setNeutralButton("What's new", (d, w) -> startSafe(new Intent(Intent.ACTION_VIEW,
+                        Uri.parse(REPO_URL + "/releases/tag/v" + updater.installedName()))))
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    View aboutRow(String label, String value, String url) {
+        return aboutRow(label, value, url, url == null ? null
+                : v -> startSafe(new Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
+    }
+
+    View aboutRow(String label, String value, String url, View.OnClickListener click) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(dp(12), dp(10), dp(12), dp(10));
+        TextView l = new TextView(this);
+        l.setText(label.toUpperCase(Locale.ROOT));
+        l.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        l.setLetterSpacing(0.12f);
+        l.setTextColor(look.text3);
+        row.addView(l);
+        TextView v = new TextView(this);
+        v.setText(value);
+        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        v.setTextColor(url != null ? look.accent : look.text);
+        v.setPadding(0, dp(2), 0, 0);
+        row.addView(v);
+        if (click != null) {
+            row.setBackground(look.rippleRect(dp(10)));
+            row.setOnClickListener(click);
+        }
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.leftMargin = lp.rightMargin = -dp(12);
+        row.setLayoutParams(lp);
+        return row;
     }
 
     void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_SHORT).show(); }

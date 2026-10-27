@@ -68,7 +68,9 @@ final class Anim {
         v.setAlpha(0.2f);
         v.setScaleX(0.9f);
         v.setScaleY(0.9f);
-        v.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(340).setInterpolator(SOFT).start();
+        // the art view has a background, so a fading alpha would be re-rendered offscreen every frame:
+        // a hardware layer draws it once and the GPU just fades / scales that texture
+        v.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(340).setInterpolator(SOFT).withLayer().start();
     }
 
     /** Dashboard cards rise in, one after another (cold start only). */

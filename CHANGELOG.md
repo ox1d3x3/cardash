@@ -3,6 +3,26 @@
 All notable changes to CarDash. Versions follow `MAJOR.MINOR[.PATCH]`; pre-releases are tagged
 `vX.Y-betaN`. Each `## vX.Y` section below becomes the notes of the matching GitHub release.
 
+## v2.7 — 2026-10-27
+
+### Added
+- **About CarDash** (*Settings → About CarDash*): version, developer **Mahabub Subhany (ox1d3x3)**,
+  source code on GitHub (both open in the browser), the automatic update check switch, *What's new*
+  and *Check for updates*.
+- **Yellow update icon.** Update checks are on by default; when a new release is found a yellow
+  *UPDATE vX.Y* icon pops up on the drive panel with a short pulse and a one-time message. Tap it:
+  the release notes and one **Download & install** button, with a progress bar, then the install.
+
+### Changed
+- *Settings → Updates* is now *Check automatically* (on / off) plus *When there's an update*:
+  show the yellow icon (new default), download in the background then ask, or install
+  automatically when parked. Earlier choices carry over.
+- **Smoother track changes**: album art is scaled and colour-picked on a background thread and only
+  re-applied when the picture really changed (players re-send the same art several times per
+  track); the art's grow-in animation renders through a hardware layer.
+- **Day / night theme switch cross-fades** instead of snapping at 6 pm and 5 am.
+- Greeting text fades without allocating offscreen layers.
+
 ## v2.6 — 2026-10-27
 
 ### Added

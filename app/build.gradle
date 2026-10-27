@@ -12,8 +12,8 @@ android {
         targetSdk 33
         // CI passes the release tag in (v2.4.1 -> 2.4.1 / 2040199); local builds use these defaults.
         // versionCode = (major*10000 + minor*100 + patch)*100 + stage (99 final, N for -betaN): tools/version.sh.
-        versionName(project.findProperty('appVersionName') ?: '2.6')
-        versionCode((project.findProperty('appVersionCode') ?: '2060099') as int)
+        versionName(project.findProperty('appVersionName') ?: '2.7')
+        versionCode((project.findProperty('appVersionCode') ?: '2070099') as int)
     }
 
     signingConfigs {

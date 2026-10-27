@@ -79,7 +79,9 @@ no third-party libraries, an APK under 0.5 MB, and zero frames drawn when nothin
 - **RAM optimiser** that is careful by design: phone-link and playing apps are never touched.
 - **Screensaver**: the car parks and locks, beside a ring clock.
 - **Auto day / night theme** that switches instantly, with no restart and no flash.
-- **Updates itself from GitHub**: new releases install automatically when the car is parked.
+- **Updates itself from GitHub**: a yellow update icon appears when there's a new release; one tap
+  downloads and installs it.
+- **About** (*Settings → About CarDash*): version, developer, source code, update check.
 
 ## Requirements
 
@@ -118,33 +120,35 @@ no third-party libraries, an APK under 0.5 MB, and zero frames drawn when nothin
 CarDash checks this repository's [Releases](https://github.com/ox1d3x3/cardash/releases) and
 updates itself, so there is nothing to copy over by USB after the first install.
 
-<p align="center"><img src="docs/images/update-chip.webp" alt="Update chip on the drive panel: up-arrow v2.5 INSTALL" width="500"></p>
+<p align="center"><img src="docs/images/update-chip.webp" alt="Yellow update icon on the drive panel: UPDATE v2.7" width="500"></p>
 
 **How it works**
 
-1. **Check**: about 25 s after the home screen appears, then every 6 hours. CarDash looks for
-   the newest release with an `.apk` attached that is newer than the installed version.
-2. **Download**: in the background, on a low-priority thread. An **update chip**
-   (`↑ v2.5`) appears next to the RAM figure and shows the progress.
-3. **Verify**: the download is only kept if it is **the same app**, **a newer version** and
-   **signed with the same key** as the installed copy.
-4. **Install**: when the car is **parked** (no GPS speed, no camera or app drawer open). CarDash
-   restarts on the new version and shows *Updated to CarDash vX.Y*.
+1. **Check** (on by default): about 25 s after the home screen appears, then every 6 hours.
+   CarDash looks for the newest release with an `.apk` attached that is newer than the installed
+   version.
+2. **Yellow update icon**: when there is one, a yellow **UPDATE vX.Y** icon pops up next to the RAM
+   figure (with a short pulse and a one-time message, then it sits still). Tap it to see what's new.
+3. **Download & install**: one button. The dialog shows the download progress, the APK is verified
+   (**same app**, **newer version**, **signed with the same key** as the installed copy, anything
+   else is discarded), then it installs. CarDash restarts on the new version and shows
+   *Updated to CarDash vX.Y*.
 
-**Settings → Updates**
+**Settings → Updates** (also in *Settings → About CarDash*)
 
 | Option | What it does |
 | --- | --- |
 | Check for updates now | Asks GitHub right away and shows what it found. |
-| Automatic updates | **Install automatically when parked** (default) · **Download, then ask me** · **Off** |
+| Check automatically | Every 6 hours. **On** by default. |
+| When there's an update | **Show the yellow update icon** (default: you tap to download and install) · **Download in the background, then ask** · **Install automatically when parked** |
 | Beta versions | Also offer pre-releases (`vX.Y-betaN`). Off by default. |
 | All releases on GitHub | Opens the releases page. |
 
 **Permissions, once**
 
 - **Without root**, Android asks you to allow CarDash to *install unknown apps* the first time.
-  Tap the update chip and CarDash takes you to that switch. On Android 12+, after CarDash has
-  installed itself once, later updates go through without a confirmation screen.
+  CarDash takes you to that switch. On Android 12+, after CarDash has installed itself once, later
+  updates go through without a confirmation screen.
 - **With root** and *RAM optimiser → Deep mode* on, updates install silently through `pm install`.
 
 > [!TIP]
@@ -253,7 +257,8 @@ updates itself, so there is nothing to copy over by USB after the first install.
   the navigation bar too.
 - **Settings** (slider icon): updates, greeting, music card, music player, theme, car colour, style, view and number
   plate, units, speed alert, screensaver, RAM optimiser, layout, dash cam, resume music, media
-  access, location, system bars, set as Home app, reset dock.
+  access, location, system bars, set as Home app, reset dock, About CarDash (version, developer
+  Mahabub Subhany / [ox1d3x3](https://github.com/ox1d3x3), source code, update check).
 
 </details>
 
@@ -351,7 +356,15 @@ CarDash is built to cost nothing when nothing changes.
   a background thread; a frame is a few bitmap draws and flat convex shapes on the GPU, with no
   allocations. The number plate is painted into the car bitmap once, not per frame.
 - **Motion on the GPU.** UI animations change only scale, alpha and translation, so nothing is
-  re-measured or re-laid-out mid-animation. Frame timing follows the display's vsync.
+  re-measured or re-laid-out mid-animation. Frame timing follows the display's vsync. Views that
+  would otherwise be re-rendered offscreen while they fade get a hardware layer for the animation
+  only; plain text fades without one.
+- **Album art off the main thread.** Players send big art (often 640–1000+ px) and re-send it with
+  every metadata update. CarDash fingerprints it, scales it to the size it's shown at and picks its
+  colour on a background thread, and applies it only when the picture actually changed: one small
+  texture per track, so track changes never stutter.
+- **Day / night switch cross-fades.** At 6 pm and 5 am the old screen fades away over the new
+  theme (one GPU read-back of the window, freed after 0.6 s) instead of snapping.
 - **Stable layouts.** Speed, clock and track text live in fixed-size views and update only when the
   value actually changes.
 - **Quiet in the background.** GPS, media callbacks and timers stop in `onPause`. The clock uses the
