@@ -3,6 +3,30 @@
 All notable changes to CarDash. Versions follow `MAJOR.MINOR[.PATCH]`; pre-releases are tagged
 `vX.Y-betaN`. Each `## vX.Y` section below becomes the notes of the matching GitHub release.
 
+## v3.0 — 2026-10-27
+
+### Added
+- **Back and Recent apps on the dock** (left), **Screensaver now** and **Shortcuts** (right).
+  Back closes the drawer or returns to the app you were last in; Recent apps opens Android's recent
+  apps, or CarDash's own list of apps you opened. Shortcuts: Notifications, Quick settings, Recent
+  apps, Screenshot, Screensaver, Volume, Wi-Fi, Bluetooth, Screen off, Power menu, Android settings,
+  CarDash settings.
+- **CarDash buttons**, an accessibility service you switch on once so those keys can press
+  Android's own Back / Recents / Notifications / Quick settings / Screenshot / Lock / Power menu. It
+  reads nothing; with root (Deep mode) CarDash turns it on for you.
+- **Media controls on the screensaver** (previous / play-pause / next inside the ring). Using them
+  keeps the screensaver up; a touch anywhere else wakes the dashboard as before.
+- *Settings → Screensaver → Start now*.
+
+### Changed
+- **The whole screen is used**: CarDash draws edge to edge and leaves room only for bars that are
+  really showing. A hidden status bar no longer leaves an empty strip at the top.
+- **Smoother clouds, less work**: the chase-cam sky is now its own layer under the road. Clouds glide
+  at 30 updates a second by moving that layer alone (no road, building or car redraw); before they
+  stepped at 8-12 fps and redrew the whole scene each time. Stars twinkle in the sky layer only.
+- The road scene no longer redraws on every GPS fix while parked (that was 2 redraws a second).
+- The screensaver keeps showing the right track when a music app's widget is in the music card.
+
 ## v2.9.1 — 2026-10-27
 
 ### Fixed

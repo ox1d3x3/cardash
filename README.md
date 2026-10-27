@@ -218,11 +218,13 @@ updates itself, so there is nothing to copy over by USB after the first install.
 - **Sky** (chase cam): blue sky, sun and drifting clouds by day; a crescent moon, twinkling stars,
   the odd shooting star and lit city windows at night. At 6 pm the sun sets with a warm dusk glow
   and the moon rises, and the reverse at 5 am.
-- **Screensaver**: after 2 minutes idle while parked (configurable, or long-press the clock), the car
+- **Screensaver**: after 2 minutes idle while parked (configurable), or right away with the **moon
+  key on the dock** (or long-press the clock, or *Settings → Screensaver → Start now*). The car
   rolls into a parking bay, brakes and flashes its indicators as it locks; beside it a ring clock
-  with a 60-tick seconds ring, date, now playing, and your speed if you pull away. *Settings →
-  Parked car on screensaver* turns the car off. Any touch wakes the dashboard without pressing what's
-  underneath. Also available as Android's system screensaver ("CarDash Clock") where the unit has
+  with a 60-tick seconds ring, date, **media controls** (previous / play-pause / next), now
+  playing, and your speed if you pull away. *Settings → Parked car on screensaver* turns the car
+  off. The media controls work without closing the screensaver; a touch anywhere else wakes the
+  dashboard without pressing what's underneath. Also available as Android's system screensaver ("CarDash Clock") where the unit has
   that menu.
 - **Sleepy cat** (*Settings → Sleepy cat on the parked car*, on by default): a moment after the car
   locks, a ginger tabby walks in, stops beside the car, wiggles, jumps onto the roof, turns round
@@ -258,6 +260,22 @@ updates itself, so there is nothing to copy over by USB after the first install.
   buttons.
 - **Dock**: 6 app slots plus an all-apps grid. Tap an empty slot to fill it, long-press any slot to
   change it. Defaults are detected automatically: maps, music player, phone / Bluetooth, settings.
+  - **Left: Back and Recent apps.** Back closes the app drawer, or takes you back to the app you
+    were last in. Recent apps opens Android's recent apps (with *CarDash buttons* on), or else
+    CarDash's own list of the apps you opened from it.
+  - **Right: Screensaver now (moon) and Shortcuts (⋯).** Shortcuts opens a panel of big tiles:
+    Notifications, Quick settings, Recent apps, Screenshot, Screensaver, Volume, Wi-Fi, Bluetooth,
+    Screen off, Power menu, Android settings, CarDash settings.
+  - On a narrow screen the keys shrink a little so everything fits.
+- **CarDash buttons** (one-time switch): Back, Recent apps, Notifications, Quick settings,
+  Screenshot, Screen off and the Power menu are Android's own keys, and Android only lets an app
+  press them through an accessibility service you turn on: *Settings → Accessibility → CarDash
+  buttons*. It requests no window content and no events from other apps; it only presses those keys.
+  CarDash offers to do it for you with root (Deep mode), and shows the ADB command for units that
+  hide the Accessibility menu:
+  `adb shell settings put secure enabled_accessibility_services xyz.ox1de.cardash/xyz.ox1de.cardash.KeysService`.
+  If Android 13 greys the switch out ("restricted setting"): *Settings → Apps → CarDash → ⋮ → Allow
+  restricted settings*. Notifications and Quick settings also work without it on most units.
 
 </details>
 
@@ -269,7 +287,9 @@ updates itself, so there is nothing to copy over by USB after the first install.
   reconnecting.
 - **System bars**: the status bar is hidden on the home screen by default (most head units leave it
   empty); swipe down from the top edge to peek. *Settings → System bars* can show it again or hide
-  the navigation bar too.
+  the navigation bar too. CarDash draws edge to edge and leaves room only for bars that are really
+  showing, so a hidden status bar gives its whole strip back to the dashboard (some head units kept
+  reporting that space even with the bar hidden).
 - **Settings** (slider icon): updates, greeting, music card, music player, theme, car colour, style, view and number
   plate, rear badge, units, speed alert, screensaver, sleepy cat, RAM optimiser, layout, dash cam, resume music, media
   access, location, system bars, set as Home app, reset dock, About CarDash (version, developer
@@ -363,10 +383,14 @@ adb shell pm disable-user --user 0 <package>                       # undo: pm en
 
 CarDash is built to cost nothing when nothing changes.
 
-- **No frames while idle.** The road animates only while the car moves or a light is fading.
-  Parked, or with another app in front: zero frames, zero CPU. The chase-cam sky ticks at a gentle
-  12 fps when it's the only thing moving (8 fps after a quiet minute), and stops entirely behind
-  the drawer, the camera, the screensaver or another app.
+- **No frames while idle.** The road animates only while the car moves or a light is fading, and a
+  GPS fix that says "still parked" doesn't redraw anything. Parked, or with another app in front:
+  no road frames, no CPU.
+- **The sky is its own layer.** In the chase cam the sky (gradients, sun, moon, stars, clouds) sits
+  under the road on a separate view. The clouds glide by moving that layer only (30 updates a
+  second, sub-pixel), so the road, buildings and car are never redrawn for them; stars twinkle at
+  12 fps in the sky layer alone, a shooting star runs at full rate only while it flies. All of it
+  stops behind the drawer, the camera, the screensaver or another app.
 - **Background work stays in the background.** App icons, album art, badge import and car rendering
   run on threads at Android's background priority, so they never take CPU from an animation.
 - **Render once, composite every frame.** Car art, lamp bands and sky layers are rasterised once on

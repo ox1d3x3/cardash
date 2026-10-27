@@ -10,6 +10,8 @@
     <color name="accent">#FF3E6AE1</color>
 
     <string name="app_name">CarDash</string>
+    <string name="keys_label">CarDash buttons (Back, Recent apps…)</string>
+    <string name="keys_desc">Lets the Back and Recent apps buttons on the CarDash dock, and the shortcuts panel (notifications, quick settings, screenshot, split screen, lock, power menu), press Android\'s own keys. CarDash does not read the screen or anything you type, and does not watch other apps.</string>
 
     <style name="Theme.CarDash" parent="@android:style/Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/bg</item>

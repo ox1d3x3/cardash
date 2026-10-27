@@ -45,6 +45,7 @@ public class DriveView extends View {
     final Paint road = new Paint();
     final Path beamPath = new Path();
     final RearScene rear = new RearScene();
+    SkyView sky;          // chase-cam sky, its own layer underneath this view
 
     Bitmap car, oldCar, headLit, tailLit; // TOP: headLit / tailLit = lamps on. REAR: headLit = stop lamp
     int carColor = 0xFFF2F3F5, style = CarArt.HATCH, view = TOP, bg = 0xFF131519;
@@ -68,11 +69,7 @@ public class DriveView extends View {
     long brakeUntil, brakeOnAt = -1, lastFrame, refAt, welcomeAt = -1, headOnAt = -1;
     float skyT;                 // chase-cam sky: 0 = day .. 1 = night, animated (sunset / sunrise)
     boolean skyInit;
-    /** Chase cam while nothing else moves: clouds drift, stars twinkle, at a gentle 12 fps (not 60). */
-    static final long AMBIENT_MS = 83;
-    /** ...and after a minute with nothing else happening, 8 fps: the drift is slow enough that it looks the same. */
-    static final long AMBIENT_IDLE_MS = 125, IDLE_AFTER = 60_000;
-    long busyAt;
+
     float refMs;
 
     public DriveView(Context c) { this(c, null); }
@@ -90,9 +87,10 @@ public class DriveView extends View {
     public void setSpeed(float ms) {
         long now = SystemClock.uptimeMillis();
         if (ms < 0) {
+            boolean still = target == 0 && shown == 0;
             target = 0;
             refAt = 0;
-            kick();
+            if (!still) kick();
             return;
         }
         // Brake lights: only for a SUDDEN drop. Measured over >= 0.4 s windows so it works the same
@@ -110,8 +108,10 @@ public class DriveView extends View {
             refAt = now;
             refMs = ms;
         }
+        // parked and staying parked: nothing to redraw (this used to cost a frame per GPS fix)
+        boolean still = ms == 0 && target == 0 && shown == 0 && now >= brakeUntil;
         target = ms;
-        kick();
+        if (!still) kick();
     }
 
     /** View + body + colour + theme + plate in one go: one re-render instead of several. */
@@ -167,8 +167,23 @@ public class DriveView extends View {
     public void setActive(boolean a) {
         active = a;
         lastFrame = 0;
-        busyAt = SystemClock.uptimeMillis();
+        syncSky();
         if (a) kick();
+    }
+
+    public void setSky(SkyView s) {
+        sky = s;
+        if (view == REAR && rear.skyDay != null) s.setScene(rear);
+        syncSky();
+    }
+
+    /** The sky layer shows (and runs) only in the chase cam, and only while this view is active. */
+    void syncSky() {
+        if (sky == null) return;
+        boolean rearView = view == REAR;
+        int vis = rearView ? VISIBLE : GONE;
+        if (sky.getVisibility() != vis) sky.setVisibility(vis);
+        sky.setRunning(rearView && active);
     }
 
     // ------------------------------------------------------------------ geometry
@@ -186,8 +201,11 @@ public class DriveView extends View {
         if (w == 0 || h == 0) return;
         if (view == REAR) {
             s = rear.layout(w, h, getPaddingTop(), getPaddingBottom(), light, bg, getResources().getDisplayMetrics().density);
+            if (sky != null) sky.setScene(rear);
+            syncSky();
             return;
         }
+        syncSky();
         float availH = h - getPaddingTop() - getPaddingBottom();
         float len = spec.tail - spec.nose;                    // visible car length in artwork units
         s = Math.min(availH * 0.91f / len, w * 0.5f / VW);
@@ -332,7 +350,6 @@ public class DriveView extends View {
         if (swapT >= 1f) oldCar = null;
         float skyGoal = night ? 1f : 0f;
         skyT = approach(skyT, skyGoal, dt / 3.2f);               // a slow, cinematic sunset / sunrise
-        if (view == REAR) rear.advance(dt);
 
         boolean welcoming = welcomeAt >= 0 && now - welcomeAt < 1700;
         if (welcomeAt >= 0 && !welcoming) welcomeAt = -1;
@@ -363,7 +380,9 @@ public class DriveView extends View {
         float halo = Math.min(1f, Math.max(brakeT, 0.28f * tailRun) + 0.7f * flash);
 
         if (view == REAR && drawnView == REAR) {
-            rear.draw(c, now, ease3(skyT), car, oldView == REAR ? oldCar : null, swapT, tailLit, pad, rspec,
+            float n = ease3(skyT);
+            if (sky != null) sky.setNight(n);
+            rear.draw(c, now, n, car, oldView == REAR ? oldCar : null, swapT, tailLit, pad, rspec,
                     dashOff, blkOff, moveT, head, lamp, halo, Math.min(1f, brakeT + 0.7f * flash), pop, appear);
         } else if (view == TOP && drawnView != REAR) {
             drawTop(c, appear, lens, lamp, halo, pop);
@@ -371,13 +390,9 @@ public class DriveView extends View {
 
         if (more && active) {
             lastFrame = now;
-            busyAt = now;
             postInvalidateOnAnimation();
-        } else if (active && view == REAR && drawnView == REAR) {
-            lastFrame = now;                       // ambient: sky keeps living, cheaply
-            postInvalidateDelayed(now - busyAt > IDLE_AFTER ? AMBIENT_IDLE_MS : AMBIENT_MS);
         } else {
-            lastFrame = 0;
+            lastFrame = 0;                         // still: no frames (the sky layer keeps itself alive)
         }
     }
 

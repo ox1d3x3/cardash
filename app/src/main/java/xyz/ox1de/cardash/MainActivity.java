@@ -223,8 +223,10 @@ public class MainActivity extends Activity {
         rightCol = findViewById(R.id.rightCol);
         dock = findViewById(R.id.dock);
         drawer = findViewById(R.id.drawer);
+        dock.addOnLayoutChangeListener((v, l, t, r, b2, ol, ot, or, ob) -> { if (r - l != or - ol && or - ol > 0) ui.post(this::buildDock); });
         grid = findViewById(R.id.grid);
         drive = findViewById(R.id.car);
+        drive.setSky(findViewById(R.id.sky));
         volCard = findViewById(R.id.volCard);
         settingsBtn = findViewById(R.id.settings);
         speedBox = findViewById(R.id.speedBox);
@@ -234,6 +236,7 @@ public class MainActivity extends Activity {
         ramTv = findViewById(R.id.ram);
         saver = findViewById(R.id.saver);
         mainView = findViewById(R.id.main);
+        findViewById(R.id.root).setOnApplyWindowInsetsListener((v, in) -> { applyInsets(in); return in; });
         camBtn = findViewById(R.id.camBtn);
         greetBox = findViewById(R.id.greet);
         greetLabel = findViewById(R.id.greetLabel);
@@ -483,11 +486,42 @@ public class MainActivity extends Activity {
         return Math.max(0, Math.min(2, sp.getInt("bars", 1)));
     }
 
+    /**
+     * Edge to edge: the window always covers the whole screen and CarDash pads itself only for the
+     * bars that are really there. Head units often keep reporting the space of a status bar that was
+     * hidden, which left an empty strip at the top; a hidden bar now gets no room at all (if you swipe
+     * it down it slides over the dashboard for a moment).
+     */
+    @SuppressWarnings("deprecation")
+    void applyInsets(WindowInsets in) {
+        int mode = barsMode();
+        int l = 0, t = 0, r = 0, b = 0;
+        if (Build.VERSION.SDK_INT >= 30) {
+            if (mode == 0 && in.isVisible(WindowInsets.Type.statusBars())) t = in.getInsets(WindowInsets.Type.statusBars()).top;
+            if (mode < 2 && in.isVisible(WindowInsets.Type.navigationBars())) {
+                android.graphics.Insets n = in.getInsets(WindowInsets.Type.navigationBars());
+                l = n.left; r = n.right; b = n.bottom;
+                if (mode == 0) t = Math.max(t, n.top);
+            }
+            android.graphics.Insets cut = in.getInsets(WindowInsets.Type.displayCutout());
+            l = Math.max(l, cut.left); r = Math.max(r, cut.right); b = Math.max(b, cut.bottom);
+            if (mode == 0) t = Math.max(t, cut.top);
+        } else {
+            if (mode == 0) t = in.getSystemWindowInsetTop();
+            if (mode < 2) { l = in.getSystemWindowInsetLeft(); r = in.getSystemWindowInsetRight(); b = in.getSystemWindowInsetBottom(); }
+        }
+        if (mainView.getPaddingTop() != t || mainView.getPaddingBottom() != b || mainView.getPaddingLeft() != l || mainView.getPaddingRight() != r) {
+            mainView.setPadding(l, t, r, b);
+            drawer.setPadding(l, t, r, b);
+        }
+    }
+
     @SuppressWarnings("deprecation")
     void applyImmersive() {
         int mode = barsMode();
         Window w = getWindow();
         if (Build.VERSION.SDK_INT >= 30) {
+            w.setDecorFitsSystemWindows(false);
             WindowInsetsController c = w.getInsetsController();
             if (c == null) return;
             c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
@@ -504,9 +538,12 @@ public class MainActivity extends Activity {
                     ? View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR : 0;
             int hide = mode == 0 ? 0 : mode == 1 ? View.SYSTEM_UI_FLAG_FULLSCREEN
                     : View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_FULLSCREEN
-                    | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_STABLE;
-            w.getDecorView().setSystemUiVisibility(lightBars | hide);
+                    | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION;
+            int edge = View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
+            w.getDecorView().setSystemUiVisibility(lightBars | hide | edge);
         }
+        View root = findViewById(R.id.root);
+        if (root != null) root.requestApplyInsets();
     }
 
     void pickBars() {
@@ -895,6 +932,7 @@ public class MainActivity extends Activity {
     }
 
     void renderMeta() {
+        if (saverOn) saver.setNowPlaying(nowPlayingLine());   // the screensaver follows the track in every mode
         if (widgetView != null) return; // the app's widget is showing the track: nothing to draw here
         if (needAccess) { loadArt(null, false); return; }
         MediaMetadata m = ctl == null ? null : ctl.getMetadata();
@@ -926,7 +964,6 @@ public class MainActivity extends Activity {
             lastSkipBack = false;
         }
         duration = m.getLong(MediaMetadata.METADATA_KEY_DURATION);
-        if (saverOn) saver.setNowPlaying(nowPlayingLine());
     }
 
     static String first(MediaMetadata m, String... keys) {
@@ -1060,8 +1097,9 @@ public class MainActivity extends Activity {
     }
 
     void renderState() {
-        if (widgetView != null) { ui.removeCallbacks(ticker); return; }
         boolean p = ctl != null && isPlaying(ctl);
+        if (saver != null) saver.setMedia(ctl != null && !needAccess, p);
+        if (widgetView != null) { ui.removeCallbacks(ticker); return; }
         if (p != lastPlaying || !iconsInit) {
             boolean change = iconsInit && p != lastPlaying;
             lastPlaying = p;
@@ -1340,7 +1378,206 @@ public class MainActivity extends Activity {
         if (i == null) { toast("App not found"); return; }
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
         booster.noteLaunch(pkg);
+        noteRecent(pkg);
         startSafe(i);
+    }
+
+    // ------------------------------------------------------------------ system keys (dock + shortcuts panel)
+
+    /** Apps opened from CarDash, newest first (for Back and the built-in recent-apps list). */
+    java.util.List<String> recents() {
+        java.util.List<String> out = new ArrayList<>();
+        for (String p : sp.getString("mru", "").split(",")) if (!p.isEmpty() && installed(p)) out.add(p);
+        return out;
+    }
+
+    void noteRecent(String pkg) {
+        java.util.List<String> l = recents();
+        l.remove(pkg);
+        l.add(0, pkg);
+        while (l.size() > 10) l.remove(l.size() - 1);
+        sp.edit().putString("mru", TextUtils.join(",", l)).apply();
+    }
+
+    /** Back on the home screen: close the drawer, else go back to the app you were last in. */
+    void navBack() {
+        if (drawerOpen) { hideDrawer(); return; }
+        java.util.List<String> r = recents();
+        if (!r.isEmpty()) { launch(r.get(0)); return; }
+        if (!KeysService.press(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)) toast("Nothing to go back to yet");
+    }
+
+    /** Android's recent apps (with CarDash buttons on), else CarDash's own list of apps you opened. */
+    void showRecents() {
+        if (KeysService.press(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_RECENTS)) return;
+        final java.util.List<String> r = recents();
+        if (!appsLoaded) { loadApps(this::showRecents); return; }
+        final java.util.List<AppEntry> list = new ArrayList<>();
+        for (String p : r) { AppEntry e = byPkg.get(p); if (e != null) list.add(e); }
+        AlertDialog.Builder b = new AlertDialog.Builder(this, dlg()).setTitle("Recent apps")
+                .setNeutralButton("Use Android's recent apps…", (d, w) -> showKeysSetup());
+        if (list.isEmpty()) {
+            b.setMessage("Apps you open from CarDash show up here.").setPositiveButton("OK", null).show();
+            return;
+        }
+        b.setAdapter(appListAdapter(list, null), (d, w) -> launch(list.get(w).pkg)).show();
+    }
+
+    /** Presses one of Android's own keys; if CarDash buttons isn't switched on, explains how (once). */
+    boolean pressKey(int action) {
+        if (KeysService.press(action)) return true;
+        showKeysSetup();
+        return false;
+    }
+
+    void showKeysSetup() {
+        boolean root = rootUpdates() || RootShell.present();
+        AlertDialog.Builder b = new AlertDialog.Builder(this, dlg())
+                .setTitle("Turn on CarDash buttons")
+                .setMessage("Back, Recent apps, Notifications, Quick settings, Screenshot, Lock and the Power menu are "
+                        + "Android's own keys. Android lets an app press them only through an accessibility service "
+                        + "you switch on once:\n\nSettings → Accessibility → CarDash buttons → On\n\n"
+                        + "It only presses those keys. CarDash doesn't read the screen, what you type, or anything "
+                        + "from other apps.\n\nSwitch greyed out (\"restricted setting\")? Settings → Apps → CarDash → "
+                        + "⋮ → Allow restricted settings, then try again.\n\nNo Accessibility menu on this unit? Over ADB:\n"
+                        + "adb shell settings put secure enabled_accessibility_services " + KeysService.component(this).flattenToString())
+                .setPositiveButton("Open Accessibility", (d, w) -> {
+                    if (!tryStart(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))) toast("This head unit hides the Accessibility menu: use the ADB command");
+                })
+                .setNegativeButton("Cancel", null);
+        if (root) b.setNeutralButton("Turn on with root", (d, w) -> enableKeysWithRoot());
+        b.show();
+    }
+
+    void enableKeysWithRoot() {
+        final String cn = KeysService.component(this).flattenToString();
+        bg.execute(() -> {
+            RootShell sh = RootShell.open();
+            String out = null;
+            if (sh != null) {
+                out = sh.exec("cur=$(settings get secure enabled_accessibility_services); "
+                        + "case \"$cur\" in *" + cn + "*) ;; ''|null) settings put secure enabled_accessibility_services " + cn + " ;; "
+                        + "*) settings put secure enabled_accessibility_services \"$cur:" + cn + "\" ;; esac; "
+                        + "settings put secure accessibility_enabled 1; echo done", 8000);
+                sh.close();
+            }
+            final boolean ok = out != null && out.contains("done");
+            ui.postDelayed(() -> toast(ok && KeysService.enabled(this) ? "CarDash buttons are on" : "Root couldn't turn it on: use Accessibility settings"), 900);
+        });
+    }
+
+    /** The "⋯" shortcuts panel: Android's quick functions as big tiles. */
+    void showKeysPanel() {
+        final AlertDialog[] dlg = new AlertDialog[1];
+        final int A_NOTIF = android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS;
+        final int A_QS = android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS;
+        Object[][] tiles = {
+                {R.drawable.ic_bell, "Notifications", (Runnable) () -> { if (!KeysService.press(A_NOTIF) && !expandStatusBar(false)) showKeysSetup(); }},
+                {R.drawable.ic_toggle, "Quick settings", (Runnable) () -> { if (!KeysService.press(A_QS) && !expandStatusBar(true)) showKeysSetup(); }},
+                {R.drawable.ic_nav_recents, "Recent apps", (Runnable) this::showRecents},
+                {R.drawable.ic_screenshot, "Screenshot", (Runnable) () -> {
+                    if (Build.VERSION.SDK_INT < 28) { toast("Needs Android 9 or newer"); return; }
+                    if (!KeysService.enabled(this)) { showKeysSetup(); return; }
+                    ui.postDelayed(() -> KeysService.press(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_TAKE_SCREENSHOT), 450);
+                }},
+                {R.drawable.ic_moon, "Screensaver", (Runnable) this::showSaver},
+                {R.drawable.ic_volume, "Volume", (Runnable) () -> am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_SAME, AudioManager.FLAG_SHOW_UI)},
+                {R.drawable.ic_wifi, "Wi-Fi", (Runnable) () -> {
+                    if (Build.VERSION.SDK_INT < 29 || !tryStart(new Intent(Settings.Panel.ACTION_WIFI))) startSafe(new Intent(Settings.ACTION_WIFI_SETTINGS));
+                }},
+                {R.drawable.ic_bluetooth, "Bluetooth", (Runnable) () -> startSafe(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS))},
+                {R.drawable.ic_lock, "Screen off", (Runnable) () -> {
+                    if (Build.VERSION.SDK_INT < 28) { toast("Needs Android 9 or newer"); return; }
+                    pressKey(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN);
+                }},
+                {R.drawable.ic_power, "Power menu", (Runnable) () -> pressKey(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_POWER_DIALOG)},
+                {R.drawable.ic_gear, "Android settings", (Runnable) () -> startSafe(new Intent(Settings.ACTION_SETTINGS))},
+                {R.drawable.ic_tune, "CarDash settings", (Runnable) this::showSettings},
+        };
+        final int cols = 4;
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(12), dp(14), dp(12), dp(6));
+        LinearLayout row = null;
+        for (int i = 0; i < tiles.length; i++) {
+            if (i % cols == 0) {
+                row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                box.addView(row);
+            }
+            final Runnable act = (Runnable) tiles[i][2];
+            LinearLayout t = new LinearLayout(this);
+            t.setOrientation(LinearLayout.VERTICAL);
+            t.setGravity(Gravity.CENTER);
+            t.setPadding(dp(4), dp(12), dp(4), dp(10));
+            t.setBackground(look.rippleRect(dp(14)));
+            ImageView ic = new ImageView(this);
+            ic.setImageResource((Integer) tiles[i][0]);
+            ic.setImageTintList(look.csl(look.text));
+            t.addView(ic, new LinearLayout.LayoutParams(dp(30), dp(30)));
+            TextView tv = new TextView(this);
+            tv.setText((String) tiles[i][1]);
+            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+            tv.setTextColor(look.text2);
+            tv.setGravity(Gravity.CENTER);
+            tv.setSingleLine(true);
+            tv.setEllipsize(TextUtils.TruncateAt.END);
+            LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            tl.topMargin = dp(8);
+            t.addView(tv, tl);
+            t.setOnClickListener(v -> { if (dlg[0] != null) dlg[0].dismiss(); act.run(); });
+            Anim.press(t, 0.94f);
+            row.addView(t, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        }
+        boolean on = KeysService.enabled(this);
+        AlertDialog.Builder b = new AlertDialog.Builder(this, dlg()).setView(box).setNegativeButton("Close", null);
+        if (!on) b.setNeutralButton("Turn on CarDash buttons…", (d, w) -> showKeysSetup());
+        dlg[0] = b.show();
+    }
+
+    /** Fallback for the notification shade / quick settings without CarDash buttons (EXPAND_STATUS_BAR). */
+    @SuppressWarnings({"JavaReflectionMemberAccess", "WrongConstant"})
+    boolean expandStatusBar(boolean settings) {
+        try {
+            Object sb = getSystemService("statusbar");
+            sb.getClass().getMethod(settings ? "expandSettingsPanel" : "expandNotificationsPanel").invoke(sb);
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** A plain icon + name list for dialogs. */
+    BaseAdapter appListAdapter(final java.util.List<AppEntry> list, final String current) {
+        return new BaseAdapter() {
+            @Override public int getCount() { return list.size(); }
+            @Override public Object getItem(int p) { return list.get(p); }
+            @Override public long getItemId(int p) { return p; }
+            @Override public View getView(int p, View v, ViewGroup parent) {
+                if (v == null) {
+                    LinearLayout l = new LinearLayout(MainActivity.this);
+                    l.setOrientation(LinearLayout.HORIZONTAL);
+                    l.setGravity(Gravity.CENTER_VERTICAL);
+                    l.setPadding(dp(20), dp(10), dp(20), dp(10));
+                    l.addView(new ImageView(MainActivity.this), new LinearLayout.LayoutParams(dp(36), dp(36)));
+                    TextView tv = new TextView(MainActivity.this);
+                    tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+                    tv.setSingleLine(true);
+                    tv.setEllipsize(TextUtils.TruncateAt.END);
+                    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                    lp.leftMargin = dp(16);
+                    l.addView(tv, lp);
+                    v = l;
+                }
+                AppEntry e = list.get(p);
+                LinearLayout l = (LinearLayout) v;
+                ((ImageView) l.getChildAt(0)).setImageBitmap(e.icon);
+                TextView tv = (TextView) l.getChildAt(1);
+                tv.setText(e.label);
+                tv.setTextColor(e.pkg != null && e.pkg.equals(current) ? look.accent : look.text);
+                return v;
+            }
+        };
     }
 
     void openAppInfo(String pkg) {
@@ -1448,9 +1685,19 @@ public class MainActivity extends Activity {
         }
     }
 
+    int dockBtn;   // button size for the current dock width
+
     void buildDock() {
         ensureDockDefaults();
         dock.removeAllViews();
+        // 6 apps + all apps, Back + Recents on the left, screensaver + shortcuts on the right: shrink a
+        // little if the dock is too narrow for all of them at full size
+        int avail = (dock.getWidth() > 0 ? dock.getWidth() : getResources().getDisplayMetrics().widthPixels)
+                - dock.getPaddingLeft() - dock.getPaddingRight() - dp(24);
+        dockBtn = Math.max(dp(44), Math.min(dp(66), avail / (SLOTS + 5) - dp(14)));
+        dock.addView(sysKey(R.drawable.ic_nav_back, "Back to the last app", v -> navBack(), v -> { showKeysPanel(); return true; }));
+        dock.addView(sysKey(R.drawable.ic_nav_recents, "Recent apps", v -> showRecents(), null));
+        dock.addView(dockGap());
         for (int i = 0; i < SLOTS; i++) {
             final int slot = i;
             final String pkg = sp.getString("dock" + i, null);
@@ -1476,6 +1723,29 @@ public class MainActivity extends Activity {
         all.setPadding(dp(19), dp(19), dp(19), dp(19));
         all.setOnClickListener(v -> showDrawer());
         dock.addView(all);
+        dock.addView(dockGap());
+        dock.addView(sysKey(R.drawable.ic_moon, "Screensaver now", v -> showSaver(), null));
+        dock.addView(sysKey(R.drawable.ic_more, "Shortcuts: notifications, quick settings, screenshot…", v -> showKeysPanel(), null));
+    }
+
+    View dockGap() {
+        View g = new View(this);
+        g.setLayoutParams(new LinearLayout.LayoutParams(0, 1, 1f));
+        return g;
+    }
+
+    /** A flat dock key (Back, Recents, screensaver, shortcuts): icon only, the theme's secondary colour. */
+    ImageButton sysKey(int icon, String label, View.OnClickListener click, View.OnLongClickListener longClick) {
+        ImageButton b = dockButton();
+        b.setBackground(look.rippleRect(dp(16)));
+        b.setImageResource(icon);
+        b.setImageTintList(look.csl(look.text2));
+        int p = Math.round(dockBtn * 0.3f);
+        b.setPadding(p, p, p, p);
+        b.setContentDescription(label);
+        b.setOnClickListener(click);
+        if (longClick != null) b.setOnLongClickListener(longClick);
+        return b;
     }
 
     ImageButton dockButton() {
@@ -1483,7 +1753,8 @@ public class MainActivity extends Activity {
         b.setBackground(look.slot(dp(16)));
         b.setScaleType(ImageView.ScaleType.FIT_CENTER);
         b.setPadding(dp(8), dp(8), dp(8), dp(8));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(66), dp(66));
+        int sz = dockBtn > 0 ? dockBtn : dp(66);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(sz, sz);
         lp.leftMargin = lp.rightMargin = dp(7);
         b.setLayoutParams(lp);
         Anim.press(b, 0.88f);
@@ -2636,12 +2907,37 @@ public class MainActivity extends Activity {
         resetIdle();
     }
 
+    int saverMedia = -1;
+
+    void saverMediaPress(int i) {
+        if (i == 0) skip(false);
+        else if (i == 2) skip(true);
+        else playPause();
+    }
+
     /** While the saver is up, a touch only wakes the dashboard; it never presses what is underneath. */
     @Override
     public boolean dispatchTouchEvent(MotionEvent e) {
         int a = e.getActionMasked();
+        if (saverMedia >= 0) {                  // a finger on the screensaver's media controls
+            if (a == MotionEvent.ACTION_UP) {
+                if (saver.mediaHit(e.getX(), e.getY()) == saverMedia) saverMediaPress(saverMedia);
+                saver.setMediaPressed(-1);
+                saverMedia = -1;
+            } else if (a == MotionEvent.ACTION_CANCEL) {
+                saver.setMediaPressed(-1);
+                saverMedia = -1;
+            }
+            return true;
+        }
         if (saverOn && a == MotionEvent.ACTION_DOWN) {
-            // the cat's asleep on the roof: it runs off first, then the dashboard comes back
+            int hit = saver.mediaHit(e.getX(), e.getY());
+            if (hit >= 0) {                      // media controls: work them, the screensaver stays
+                saverMedia = hit;
+                saver.setMediaPressed(hit);
+                return true;
+            }
+            // anywhere else: the cat (if it's asleep on the roof) runs off first, then the dashboard comes back
             if (!saver.catTap(this::hideSaver)) hideSaver();
             swallowTouch = true;
         }
@@ -2716,7 +3012,8 @@ public class MainActivity extends Activity {
             if (opts[i] == saverMinutes()) cur = i;
         }
         new AlertDialog.Builder(this, dlg())
-                .setTitle("Screensaver  ·  long-press the clock to start it now")
+                .setTitle("Screensaver  ·  the moon on the dock starts it now")
+                .setPositiveButton("Start now", (d, w) -> showSaver())
                 .setSingleChoiceItems(names, cur, (d, w) -> {
                     sp.edit().putInt("saverMin", opts[w]).apply();
                     d.dismiss();

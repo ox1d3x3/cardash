@@ -68,6 +68,14 @@ public class ClockView extends View {
     float s, carCx, carL, carT, bayL, bayR, bayTop, bayBot, lineW, glowR;
     long introAt = -1;
 
+    // media controls inside the ring: previous / play-pause / next (touching them never closes the saver)
+    boolean mediaOn, mediaPlaying;
+    int mediaPressed = -1;
+    final float[] mediaX = new float[3];
+    float mediaY = -1, mediaR, mediaHitR;
+    final Paint mIcon = new Paint(Paint.ANTI_ALIAS_FLAG), mBg = new Paint(Paint.ANTI_ALIAS_FLAG);
+    final android.graphics.Path mPath = new android.graphics.Path();
+
     // the cat that comes to sleep on the roof
     final SleepyCat cat = new SleepyCat();
     boolean catOn = true;
@@ -124,6 +132,30 @@ public class ClockView extends View {
         running = false;
         removeCallbacks(tickR);
         cat.reset();
+    }
+
+    /** Show the media controls (a player session exists) and whether it's playing. */
+    public void setMedia(boolean show, boolean playing) {
+        if (show == mediaOn && playing == mediaPlaying) return;
+        mediaOn = show;
+        mediaPlaying = playing;
+        if (running) invalidate();
+    }
+
+    /** @return 0 previous, 1 play/pause, 2 next, or -1 if (x, y) isn't on a media control */
+    public int mediaHit(float x, float y) {
+        if (!mediaOn || mediaY < 0) return -1;
+        for (int i = 0; i < 3; i++) {
+            float dx = x - mediaX[i], dy = y - mediaY;
+            if (dx * dx + dy * dy <= mediaHitR * mediaHitR) return i;
+        }
+        return -1;
+    }
+
+    public void setMediaPressed(int i) {
+        if (i == mediaPressed) return;
+        mediaPressed = i;
+        invalidate();
     }
 
     public void setCat(boolean on) {
@@ -328,6 +360,8 @@ public class ClockView extends View {
             cv.drawText(speed, cx, cy - ts * (ampm.isEmpty() ? 0.52f : 0.78f), spd);
         }
         cv.drawText(date, cx, base + R * 0.26f, small);
+        if (mediaOn) drawMedia(cv, cx, cy + R * 0.7f, R);
+        else mediaY = -1;
 
         if (hasSub > 0) {
             sub.setTextSize(R * 0.085f);
@@ -336,6 +370,45 @@ public class ClockView extends View {
                 subShown = TextUtils.ellipsize(nowPlaying, sub, (split ? 0.6f : 0.8f) * w, TextUtils.TruncateAt.END);
             }
             cv.drawText(subShown, 0, subShown.length(), cx, cy + R + R * 0.24f, sub);
+        }
+    }
+
+    /** ⏮ ⏯ ⏭ inside the ring, under the date: dim, so they don't burn in or distract. */
+    void drawMedia(Canvas cv, float cx, float y, float R) {
+        mediaY = y;
+        mediaR = R * 0.105f;
+        float gap = R * 0.3f;
+        mediaX[0] = cx - gap; mediaX[1] = cx; mediaX[2] = cx + gap;
+        mediaHitR = Math.max(mediaR * 1.5f, 26 * getResources().getDisplayMetrics().density);
+        for (int i = 0; i < 3; i++) {
+            float x = mediaX[i], r = i == 1 ? mediaR * 1.12f : mediaR;
+            boolean pr = i == mediaPressed;
+            if (i == 1 || pr) {
+                mBg.setColor(pr ? 0x40FFFFFF : 0x1AFFFFFF);
+                cv.drawCircle(x, y, r * 1.25f, mBg);
+            }
+            mIcon.setColor(pr ? 0xFFFFFFFF : 0xFFAEB4BD);
+            float u = r * 0.5f;                                 // icon half-size
+            mPath.rewind();
+            if (i == 1 && mediaPlaying) {                      // pause bars
+                cv.drawRect(x - u * 0.75f, y - u, x - u * 0.25f, y + u, mIcon);
+                cv.drawRect(x + u * 0.25f, y - u, x + u * 0.75f, y + u, mIcon);
+                continue;
+            }
+            if (i == 1) {                                      // play
+                mPath.moveTo(x - u * 0.55f, y - u);
+                mPath.lineTo(x + u * 0.95f, y);
+                mPath.lineTo(x - u * 0.55f, y + u);
+            } else {
+                float d = i == 0 ? -1 : 1;                     // previous / next: triangle + bar
+                mPath.moveTo(x - d * u * 0.7f, y - u * 0.85f);
+                mPath.lineTo(x + d * u * 0.55f, y);
+                mPath.lineTo(x - d * u * 0.7f, y + u * 0.85f);
+                cv.drawRect(Math.min(x + d * u * 0.55f, x + d * u * 0.85f), y - u * 0.85f,
+                        Math.max(x + d * u * 0.55f, x + d * u * 0.85f), y + u * 0.85f, mIcon);
+            }
+            mPath.close();
+            cv.drawPath(mPath, mIcon);
         }
     }
 

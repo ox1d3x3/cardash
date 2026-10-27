@@ -228,12 +228,26 @@
                     </LinearLayout>
                 </LinearLayout>
 
-                <xyz.ox1de.cardash.DriveView
-                    android:id="@+id/car"
+                <!-- the chase cam's sky is its own layer under the road, so drifting clouds never
+                     redraw the road scene -->
+                <FrameLayout
+                    android:id="@+id/carBox"
                     android:layout_width="match_parent"
                     android:layout_height="0dp"
-                    android:layout_weight="1"
-                    android:paddingTop="6dp" />
+                    android:layout_weight="1">
+
+                    <xyz.ox1de.cardash.SkyView
+                        android:id="@+id/sky"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:visibility="gone" />
+
+                    <xyz.ox1de.cardash.DriveView
+                        android:id="@+id/car"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:paddingTop="6dp" />
+                </FrameLayout>
             </LinearLayout>
 
             <Space

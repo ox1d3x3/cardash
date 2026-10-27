@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only for pressing Android's own keys (performGlobalAction). No window content, no other apps'
+     events: the only event type requested is a rare one, and only from CarDash itself. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeAnnouncement"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault"
+    android:canRetrieveWindowContent="false"
+    android:description="@string/keys_desc"
+    android:notificationTimeout="1000"
+    android:packageNames="xyz.ox1de.cardash" />

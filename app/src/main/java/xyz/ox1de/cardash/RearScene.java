@@ -64,7 +64,7 @@ final class RearScene {
     // sky (built once per size)
     Bitmap skyDay, skyNight, clouds, sun, moon;
     int skyW, skyHt;
-    float sunX, sunY, moonX, moonY, sunR, moonR, cloudX;
+    float sunX, sunY, moonX, moonY, sunR, moonR;
     final float[][] twinkle = new float[3][];
     long nextShoot = -1, shootAt = -1;
     float shX, shY, shDx, shDy;
@@ -366,11 +366,11 @@ final class RearScene {
         return t * t * (3 - 2 * t);
     }
 
-    /** Clouds drift with the wind; called every frame with the frame time. */
-    void advance(float dt) {
-        cloudX += dt * w * 0.012f;
-        if (cloudX > w) cloudX -= w;
-    }
+    /** Stars are out: the sky view keeps a gentle twinkle going. */
+    boolean starsVisible(float n) { return smooth(0.55f, 1f, n) > 0.01f; }
+
+    /** A shooting star is flying (or about to): the sky view draws at full rate for it. */
+    boolean shooting(long now) { return shootAt >= 0 || (nextShoot >= 0 && nextShoot - now < 100); }
 
     void drawSky(Canvas c, float n, long now) {
         if (skyDay == null) return;
@@ -401,15 +401,7 @@ final class RearScene {
             bmp.setAlpha((int) (255 * (1f - 0.5f * rise)));
             c.drawBitmap(moon, moonX - moon.getWidth() / 2f, y - moon.getHeight() / 2f, bmp);
         }
-        // clouds (day), sliding with the wind, wrapping round
-        float ca = 1f - smooth(0.2f, 0.7f, n);
-        if (ca > 0.01f) {
-            bmp.setAlpha((int) (235 * ca));
-            float cy = top + skyH * 0.04f;
-            c.drawBitmap(clouds, cloudX, cy, bmp);
-            c.drawBitmap(clouds, cloudX - w, cy, bmp);
-        }
-        bmp.setAlpha(255);
+        // (the clouds are a separate sliding layer: SkyView)
         // sunset / sunrise glow on the horizon while the change happens
         float dk = (float) Math.sin(Math.PI * Math.max(0f, Math.min(1f, n)));
         if (dk > 0.01f) {
@@ -450,7 +442,7 @@ final class RearScene {
      */
     void draw(Canvas c, long now, float n, Bitmap car, Bitmap oldCar, float swapT, Bitmap tail, int pad, CarArt.RearSpec sp,
               float dashOff, float blkOff, float moveT, float head, float lamp, float halo, float brake, float pop, float appear) {
-        drawSky(c, n, now);
+        // the sky is drawn underneath by SkyView; this view leaves it transparent
 
         // ground + road (day / night versions cross-fade)
         if (n < 0.999f) { groundD.setAlpha(255); c.drawRect(0, hY, w, bottom, groundD); roadD.setAlpha(255); c.drawPath(roadPath, roadD); }
