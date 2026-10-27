@@ -3,6 +3,24 @@
 All notable changes to CarDash. Versions follow `MAJOR.MINOR[.PATCH]`; pre-releases are tagged
 `vX.Y-betaN`. Each `## vX.Y` section below becomes the notes of the matching GitHub release.
 
+## v2.5 — 2026-10-27
+
+### Added
+- **Greeting.** The first time after install or after the head unit boots, the speed slot says
+  *Welcome, (your name)*, then turns into *Good morning / Good afternoon / Good evening*. After
+  the unit has slept or been off for 10+ minutes, you get the time-of-day greeting again. It fades
+  away the moment the car moves and the speed takes its place. *Settings → Greeting* sets your name
+  or turns it off; tap the greeting to dismiss it, long-press to change the name.
+- **Music player choice lists music apps first**: Spotify, YouTube Music, AIMP, Poweramp and
+  any other app that can be a car-audio source, then everything else.
+
+### Changed
+- Pressing play with nothing playing opens your chosen default player when it isn't the app
+  Android would resume (for example, Spotify chosen but AIMP played last).
+- CI test builds are versioned below the release they lead up to (`2.5-dev+<commit>`), so the
+  updater always moves them on to the real release.
+- The updater's background thread is released when the home screen is destroyed.
+
 ## v2.4 — 2026-10-27
 
 ### Added

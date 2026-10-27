@@ -69,8 +69,10 @@ no third-party libraries, an APK under 0.5 MB, and zero frames drawn when nothin
   windows at night, with a dusk transition.
 - **Your number plate** on the back of the car.
 - **Big speed and clock**, a speed alert, km/h or mph.
-- **Now playing** for any player (AIMP, Spotify, radio apps, YouTube Music…): album art, big
-  buttons, **swipe to skip**, volume in sync with the hardware knob.
+- **A greeting with your name**: *Welcome* after start-up, then *Good morning / afternoon /
+  evening*. It gives way to the speed the moment you drive off.
+- **Now playing** for any player (AIMP, Spotify, YouTube Music, radio apps…), with any of them as
+  your default: album art, big buttons, **swipe to skip**, volume in sync with the hardware knob.
 - **Dash cam**: live DDPAI front camera over Wi-Fi and the wired rear camera, full screen or as a
   home-screen tile, with Android Auto / CarPlay protection.
 - **RAM optimiser** that is careful by design: phone-link and playing apps are never touched.
@@ -167,6 +169,13 @@ updates itself, so there is nothing to copy over by USB after the first install.
 - **Paint colour**: *Auto* (white car on the dark theme, black on the light theme) or a fixed
   colour. Changes cross-fade, including the automatic switch at 6 pm / 5 am.
 - **Number plate** (*Settings → Number plate*): letters, digits, space, dash and dot, up to 10.
+- **Greeting** (*Settings → Greeting*): the first time after install or after the head unit boots,
+  the speed slot says *Welcome, &lt;your name&gt;*, which turns into *Good morning* (5:00–11:59),
+  *Good afternoon* (12:00–16:59) or *Good evening* (17:00–4:59). After the unit has slept, been
+  switched off or been away from the home screen for 10+ minutes, the time-of-day greeting comes
+  back. It stays while you're parked and fades away as soon as GPS sees the car moving (two fixes
+  above about 7 km/h, so standstill jitter can't trigger it), and the speed takes its place. Tap it
+  to dismiss it, long-press it to change your name.
 - **Speed alert**: choose a limit and the speed turns red above it.
 
 </details>
@@ -210,8 +219,10 @@ updates itself, so there is nothing to copy over by USB after the first install.
 - **Now playing**: album art (the card picks up a soft wash of the album colour), title, artist,
   progress and big previous / play-pause / next buttons. **Swipe the card** left for the next
   track and right for the previous one. It controls whichever app is actually playing.
-- Tap the card to open the player; long-press it to choose your default player (AIMP is picked
-  automatically if installed).
+- Tap the card to open the player; long-press it (or *Settings → Music player*) to choose your
+  default player. Music apps (Spotify, YouTube Music, AIMP, Poweramp…) are listed first; AIMP is
+  picked automatically if nothing is chosen. Pressing play with nothing playing resumes the last
+  player, or opens your default player if that's a different app.
 - **Resume music after start** (opt-in): once per boot, if nothing is playing after about 8 s,
   CarDash presses play for the last music app.
 - **Volume**: slider and mute for the media stream, kept in sync with the hardware knob and wheel
@@ -230,7 +241,7 @@ updates itself, so there is nothing to copy over by USB after the first install.
 - **System bars**: the status bar is hidden on the home screen by default (most head units leave it
   empty); swipe down from the top edge to peek. *Settings → System bars* can show it again or hide
   the navigation bar too.
-- **Settings** (slider icon): updates, music player, theme, car colour, style, view and number
+- **Settings** (slider icon): updates, greeting, music player, theme, car colour, style, view and number
   plate, units, speed alert, screensaver, RAM optimiser, layout, dash cam, resume music, media
   access, location, system bars, set as Home app, reset dock.
 

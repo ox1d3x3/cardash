@@ -116,6 +116,12 @@ public class MainActivity extends Activity {
     boolean updManual, updInstallWhenReady;
     String updAutoTried;   // the release the parked auto-install already tried, so a cancel isn't retried every 30 s
     TextView ramTv;
+    View greetBox;
+    TextView greetLabel, greetName;
+    boolean greetShown, greetWelcome, greetPendingWelcome;
+    int greetMoving;
+    float greetNamePx;
+    long stoppedAt, saverAt, sleepGap = -1;
     ClockView saver;
     View mainView;
     boolean saverOn, swallowTouch;
@@ -204,6 +210,9 @@ public class MainActivity extends Activity {
         saver = findViewById(R.id.saver);
         mainView = findViewById(R.id.main);
         camBtn = findViewById(R.id.camBtn);
+        greetBox = findViewById(R.id.greet);
+        greetLabel = findViewById(R.id.greetLabel);
+        greetName = findViewById(R.id.greetName);
         refreshTheme(true); // before the first frame, so there is never a wrong-theme flash
         drive.welcome();    // car fades in, lamps flash once
         booster = new Booster(this, sp, ui, listenerCn, new BoostL());
@@ -216,6 +225,15 @@ public class MainActivity extends Activity {
         if (lastVer != null && !lastVer.equals(ver)) ui.postDelayed(() -> toast("Updated to CarDash " + ver), 1500);
         if (!ver.equals(lastVer)) sp.edit().putString("lastVer", ver).apply();
         setupCam();
+        greetBox.setOnClickListener(v -> { if (greetUser().isEmpty()) editGreetName(); else hideGreeting(true); });
+        greetBox.setOnLongClickListener(v -> { editGreetName(); return true; });
+        Anim.press(greetBox, 0.96f);
+        // First start after install, or the first start since the head unit booted: "Welcome"
+        long bootAt = System.currentTimeMillis() - SystemClock.elapsedRealtime();
+        if (!sp.contains("greetBoot") || Math.abs(sp.getLong("greetBoot", 0) - bootAt) > 120_000) {
+            sp.edit().putLong("greetBoot", bootAt).apply();
+            queueGreeting(true, b == null ? 650 : 200); // after the cards have risen in
+        }
         ramTv.setOnClickListener(v -> manualClean());
         ramTv.setOnLongClickListener(v -> { showOptimizer(); return true; });
         clockTv.setOnLongClickListener(v -> { showSaver(); return true; });
@@ -312,6 +330,20 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        // Back after 10+ minutes away (ignition off, screen off, a long time in another app): new drive, new greeting
+        if (stoppedAt > 0 && SystemClock.elapsedRealtime() - stoppedAt >= NEW_SESSION_MS) queueGreeting(false, 700);
+        stoppedAt = 0;
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        stoppedAt = SystemClock.elapsedRealtime();
+    }
+
+    @Override
     protected void onPause() {
         super.onPause();
         resumed = false;
@@ -342,6 +374,8 @@ public class MainActivity extends Activity {
         try { cm.unregisterNetworkCallback(netCb); } catch (Exception ignored) { }
         ui.removeCallbacksAndMessages(null);
         bg.shutdownNow();
+        updater.ex.shutdown();
+        if (InstallReceiver.active == updater) InstallReceiver.active = null;
     }
 
     @Override
@@ -571,6 +605,9 @@ public class MainActivity extends Activity {
         dateTv.setTextSize(TypedValue.COMPLEX_UNIT_PX, small);
         gpsTv.setTextSize(TypedValue.COMPLEX_UNIT_PX, chip);
         ramTv.setTextSize(TypedValue.COMPLEX_UNIT_PX, chip);
+        greetLabel.setTextSize(TypedValue.COMPLEX_UNIT_PX, small * 0.92f);
+        greetNamePx = clamp(speed * 0.46f, dp(26), dp(64));
+        if (greetShown) fitGreetName();
     }
 
     static float clamp(float v, float lo, float hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -588,6 +625,12 @@ public class MainActivity extends Activity {
         }
         setT(clockTv, clockFmt.format(d));
         setT(dateTv, dateFmt.format(d));
+        // Head units often just suspend on ignition off and keep this screen "open". Suspended time counts
+        // in elapsedRealtime but not in uptimeMillis, so a jump in the gap means the unit slept: new drive.
+        long gap = SystemClock.elapsedRealtime() - SystemClock.uptimeMillis();
+        if (sleepGap >= 0 && gap - sleepGap >= NEW_SESSION_MS) queueGreeting(false, 700);
+        sleepGap = gap;
+        if (greetShown && !greetWelcome && !dayGreeting().equals(greetPhrase)) setGreetingText(false, true); // 11:59 -> 12:00
         refreshTheme(false);
         updateCamInfo();
     }
@@ -642,6 +685,10 @@ public class MainActivity extends Activity {
         float s = l.hasSpeed() ? l.getSpeed() : 0f;
         if (s < 0.6f) s = 0f; // kill standstill jitter
         renderSpeed(s);
+        if (greetShown) { // the car moved off: the speed takes the greeting's place (two fixes, so GPS jitter can't do it)
+            if (s >= 2f) { if (++greetMoving >= 2 || s >= 4f) hideGreeting(true); }
+            else greetMoving = 0;
+        }
         setT(gpsTv, l.hasAccuracy() ? "GPS · ±" + Math.round(l.getAccuracy()) + " M" : "GPS · LOCKED");
         if (l.hasBearing() && s > 1.5f) setT(headingTv, "\u00B7  " + compass(l.getBearing()));
         rememberPlace(l);
@@ -800,7 +847,11 @@ public class MainActivity extends Activity {
     void setController(MediaController c) {
         if (ctl != null) ctl.unregisterCallback(mcb);
         ctl = c;
-        if (c != null) c.registerCallback(mcb, ui);
+        if (c != null) {
+            c.registerCallback(mcb, ui);
+            String pk = c.getPackageName();
+            if (!pk.equals(sp.getString("lastSession", null))) sp.edit().putString("lastSession", pk).apply();
+        }
         renderMeta();
         renderState();
     }
@@ -981,9 +1032,12 @@ public class MainActivity extends Activity {
             if (isPlaying(ctl)) t.pause(); else t.play();
             return;
         }
-        // No live session: poke the last player with a media key, then open the chosen player if nothing wakes up.
-        sendKey(KeyEvent.KEYCODE_MEDIA_PLAY);
+        // No live session. If your chosen player (Spotify, YouTube Music…) isn't the app Android would resume,
+        // open it; otherwise poke the last player with a media key, and open the chosen player if nothing wakes up.
         final String p = player();
+        String last = sp.getString("lastSession", null);
+        if (p != null && sp.contains("player") && last != null && !p.equals(last)) { launch(p); return; }
+        sendKey(KeyEvent.KEYCODE_MEDIA_PLAY);
         ui.postDelayed(() -> { if (ctl == null && p != null && resumed) launch(p); }, 1200);
     }
 
@@ -1028,8 +1082,26 @@ public class MainActivity extends Activity {
         return p == null ? "your music app" : labelOf(p);
     }
 
+    /** Spotify, YouTube Music, AIMP, Poweramp… : every app that can be a car-audio source (what Android Auto looks for). */
+    Set<String> musicApps() {
+        Set<String> out = new HashSet<>();
+        try {
+            for (ResolveInfo ri : pm.queryIntentServices(new Intent("android.media.browse.MediaBrowserService"), 0))
+                out.add(ri.serviceInfo.packageName);
+            for (ResolveInfo ri : pm.queryBroadcastReceivers(new Intent(Intent.ACTION_MEDIA_BUTTON), 0))
+                out.add(ri.activityInfo.packageName);
+        } catch (Exception ignored) { }
+        for (String k : KNOWN_PLAYERS) out.add(k);
+        out.remove(getPackageName());
+        return out;
+    }
+
+    static final String[] KNOWN_PLAYERS = {AIMP, "com.spotify.music", "com.google.android.apps.youtube.music",
+            "com.aspiro.tidal", "deezer.android.app", "com.apple.android.music", "com.amazon.mp3",
+            "com.soundcloud.android", "com.maxmpz.audioplayer", "in.krosbits.musicolet"};
+
     void pickPlayer() {
-        pickApp("Music player", player(), false, pkg -> {
+        pickApp("Music player  ·  music apps first", player(), false, musicApps(), pkg -> {
             sp.edit().putString("player", pkg).apply();
             if (resumed) { disconnectMedia(); connectMedia(); }
         });
@@ -1332,9 +1404,14 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------------ dialogs
 
     void pickApp(String title, String current, boolean allowClear, Consumer<String> done) {
+        pickApp(title, current, allowClear, null, done);
+    }
+
+    /** @param top packages listed first (e.g. the music apps when choosing a player); the rest follow A-Z */
+    void pickApp(String title, String current, boolean allowClear, Set<String> top, Consumer<String> done) {
         if (!appsLoaded) {
             toast("Loading apps…");
-            loadApps(() -> pickApp(title, current, allowClear, done));
+            loadApps(() -> pickApp(title, current, allowClear, top, done));
             return;
         }
         final List<AppEntry> list = new ArrayList<>();
@@ -1343,7 +1420,12 @@ public class MainActivity extends Activity {
             none.label = "— Empty slot —";
             list.add(none);
         }
-        list.addAll(apps);
+        if (top != null && !top.isEmpty()) {
+            for (AppEntry e : apps) if (top.contains(e.pkg)) list.add(e);
+            for (AppEntry e : apps) if (!top.contains(e.pkg)) list.add(e);
+        } else {
+            list.addAll(apps);
+        }
         BaseAdapter ad = new BaseAdapter() {
             @Override public int getCount() { return list.size(); }
             @Override public Object getItem(int p) { return list.get(p); }
@@ -1389,6 +1471,9 @@ public class MainActivity extends Activity {
         final List<String> labels = new ArrayList<>();
         final List<Runnable> acts = new ArrayList<>();
         labels.add("Updates:  " + updateSummary());                                acts.add(this::showUpdates);
+        String gu = greetUser();
+        labels.add("Greeting:  " + (!greetOn() ? "off" : gu.isEmpty() ? "on  ·  add your name" : "on  ·  " + gu));
+        acts.add(this::showGreetSettings);
         labels.add("Music player:  " + playerLabel());                           acts.add(this::pickPlayer);
         labels.add("Theme:  " + THEME_NAMES[themeMode()]);                       acts.add(this::pickTheme);
         labels.add("Car colour:  " + CAR_COLOR_NAMES[carColorIndex()]);          acts.add(this::pickCarColor);
@@ -1620,6 +1705,8 @@ public class MainActivity extends Activity {
             updChip.setTextColor(L.accent);
         }
         headingTv.setTextColor(L.text3);
+        greetName.setTextColor(L.text);
+        greetLabel.setTextColor(greetUser().isEmpty() ? L.accent : L.text2);
         posTv.setTextColor(L.text3);
         durTv.setTextColor(L.text3);
         appTv.setTextColor(L.accent);
@@ -2347,6 +2434,7 @@ public class MainActivity extends Activity {
     void showSaver() {
         if (saverOn || saver == null) return;
         saverOn = true;
+        saverAt = SystemClock.elapsedRealtime();
         ui.removeCallbacks(idleR);
         ui.removeCallbacks(ticker);
         saver.setNowPlaying(nowPlayingLine());
@@ -2380,6 +2468,7 @@ public class MainActivity extends Activity {
         if (resumed) renderState(); // restart the progress ticker
         updateCamSession();
         resetIdle();
+        if (resumed && SystemClock.elapsedRealtime() - saverAt >= NEW_SESSION_MS) queueGreeting(false, 260);
     }
 
     void pickSaver() {
@@ -2635,6 +2724,170 @@ public class MainActivity extends Activity {
 
     void startSafe(Intent i) {
         if (!tryStart(i)) toast("Not available on this unit");
+    }
+
+    // ------------------------------------------------------------------ greeting
+
+    static final long NEW_SESSION_MS = 10 * 60_000L;
+    String greetPhrase = "";
+
+    boolean greetOn() { return sp.getBoolean("greetOn", true); }
+
+    String greetUser() { return sp.getString("greetName", "").trim(); }
+
+    /** 5:00-11:59 morning, 12:00-16:59 afternoon, 17:00-4:59 evening. */
+    static String dayGreeting() {
+        int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+        return h >= 5 && h < 12 ? "Good morning" : h >= 12 && h < 17 ? "Good afternoon" : "Good evening";
+    }
+
+    final Runnable greetR = this::runGreeting;
+
+    /** @param welcome first start after install / boot: "Welcome", turning into the time-of-day greeting. */
+    void queueGreeting(boolean welcome, long delayMs) {
+        if (!greetOn()) return;
+        greetPendingWelcome |= welcome;
+        ui.removeCallbacks(greetR);
+        ui.postDelayed(greetR, delayMs);
+    }
+
+    void runGreeting() {
+        boolean welcome = greetPendingWelcome;
+        greetPendingWelcome = false;
+        boolean moving = lastSpeed >= 2f && SystemClock.elapsedRealtime() - lastFix < 5000;
+        if (moving || !greetOn()) return; // already driving: no greeting to dismiss
+        showGreeting(welcome);
+    }
+
+    final Runnable greetToDayR = () -> { if (greetShown && greetWelcome) setGreetingText(false, true); };
+
+    void showGreeting(boolean welcome) {
+        greetMoving = 0;
+        ui.removeCallbacks(greetToDayR);
+        if (welcome) ui.postDelayed(greetToDayR, 4500); // "Welcome, Mahabub" -> "Good evening, Mahabub"
+        if (greetShown) { setGreetingText(welcome, true); return; }
+        setGreetingText(welcome, false);
+        greetShown = true;
+        // speed out (it's 0 while parked anyway), greeting in: GPU alpha / translation only
+        speedBox.animate().cancel();
+        speedBox.animate().alpha(0f).translationY(-dp(6)).setStartDelay(0).setDuration(200)
+                .setInterpolator(Anim.OUT).withLayer()
+                .withEndAction(() -> { if (greetShown) speedBox.setVisibility(View.INVISIBLE); }).start();
+        greetBox.animate().cancel();
+        greetBox.setAlpha(1f);
+        greetBox.setTranslationY(0f);
+        greetBox.setVisibility(View.VISIBLE);
+        rise(greetLabel, 140);
+        rise(greetName, 230);
+    }
+
+    void rise(View v, long delay) {
+        v.animate().cancel();
+        v.setAlpha(0f);
+        v.setTranslationY(dp(10));
+        v.animate().alpha(1f).translationY(0f).setStartDelay(delay).setDuration(560).setInterpolator(Anim.OUT).withLayer().start();
+    }
+
+    /** @param morph cross-fade from the text that's showing now */
+    void setGreetingText(final boolean welcome, boolean morph) {
+        final String user = greetUser();
+        final String phrase = welcome ? "Welcome" : dayGreeting();
+        if (morph && greetShown) {
+            greetWelcome = welcome;
+            greetPhrase = phrase;
+            greetLabel.animate().cancel();
+            greetLabel.animate().alpha(0f).translationY(-dp(6)).setStartDelay(0).setDuration(200).setInterpolator(Anim.OUT).withLayer().start();
+            greetName.animate().cancel();
+            greetName.animate().alpha(0f).translationY(-dp(6)).setStartDelay(30).setDuration(200).setInterpolator(Anim.OUT).withLayer()
+                    .withEndAction(() -> {   // both are faded out by now: swap the words, rise back in
+                        if (!greetShown) return;
+                        applyGreetingText(welcome, phrase, user);
+                        rise(greetLabel, 0);
+                        rise(greetName, 80);
+                    }).start();
+            return;
+        }
+        applyGreetingText(welcome, phrase, user);
+    }
+
+    void applyGreetingText(boolean welcome, String phrase, String user) {
+        greetWelcome = welcome;
+        greetPhrase = phrase;
+        if (user.isEmpty()) {   // no name yet: the small line invites you to add one
+            greetLabel.setText("TAP TO ADD YOUR NAME");
+            greetLabel.setTextColor(look.accent);
+            greetName.setText(phrase);
+        } else {
+            greetLabel.setText(phrase.toUpperCase(Locale.getDefault()));
+            greetLabel.setTextColor(look.text2);
+            greetName.setText(user);
+        }
+        fitGreetName();
+    }
+
+    /** Largest size up to greetNamePx that fits the slot on one line (long names shrink, then ellipsize). */
+    void fitGreetName() {
+        float px = greetNamePx > 0 ? greetNamePx : dp(40);
+        int avail = (speedBox.getWidth() > 0 ? speedBox.getWidth() : drivePanel.getWidth() / 2) - dp(16);
+        android.text.TextPaint tp = new android.text.TextPaint(greetName.getPaint());
+        tp.setTextSize(px);
+        float w = tp.measureText(greetName.getText().toString());
+        if (avail > 0 && w > avail) px = Math.max(dp(22), px * avail / w);
+        if (Math.abs(greetName.getTextSize() - px) > 0.5f) greetName.setTextSize(TypedValue.COMPLEX_UNIT_PX, px);
+    }
+
+    void hideGreeting(boolean animate) {
+        if (!greetShown) return;
+        greetShown = false;
+        ui.removeCallbacks(greetToDayR);
+        greetBox.animate().cancel();
+        speedBox.animate().cancel();
+        speedBox.setVisibility(View.VISIBLE);
+        if (!animate) {
+            greetBox.setVisibility(View.GONE);
+            speedBox.setAlpha(1f);
+            speedBox.setTranslationY(0f);
+            return;
+        }
+        greetBox.animate().alpha(0f).translationY(-dp(8)).setStartDelay(0).setDuration(240).setInterpolator(Anim.OUT).withLayer()
+                .withEndAction(() -> { if (!greetShown) greetBox.setVisibility(View.GONE); }).start();
+        speedBox.setAlpha(0f);
+        speedBox.setTranslationY(dp(10));
+        speedBox.animate().alpha(1f).translationY(0f).setStartDelay(120).setDuration(420).setInterpolator(Anim.OUT).withLayer().start();
+    }
+
+    void editGreetName() {
+        editText("Your name  ·  for the greeting", greetUser(), v -> {
+            String n = v.trim().replaceAll("\\s+", " ");
+            if (n.length() > 20) n = n.substring(0, 20).trim();
+            sp.edit().putString("greetName", n).putBoolean("greetOn", true).apply();
+            if (greetShown) setGreetingText(greetWelcome, true);
+            else queueGreeting(false, 150);
+        });
+    }
+
+    void showGreetSettings() {
+        final boolean on = greetOn();
+        final String u = greetUser();
+        String[] items = {
+                "Your name:  " + (u.isEmpty() ? "not set" : u),
+                "Greeting:  " + (on ? "on" : "off"),
+                "Show it now"};
+        new AlertDialog.Builder(this, dlg())
+                .setTitle("Greeting  ·  Welcome after start-up, then good morning / afternoon / evening until you drive off")
+                .setItems(items, (d, w) -> {
+                    if (w == 0) editGreetName();
+                    else if (w == 1) {
+                        sp.edit().putBoolean("greetOn", !on).apply();
+                        toast("Greeting: " + (!on ? "on" : "off"));
+                        if (on) hideGreeting(true);
+                    } else {
+                        sp.edit().putBoolean("greetOn", true).apply();
+                        ui.removeCallbacks(greetR);
+                        showGreeting(false);
+                    }
+                })
+                .show();
     }
 
     // ------------------------------------------------------------------ updates (GitHub Releases)

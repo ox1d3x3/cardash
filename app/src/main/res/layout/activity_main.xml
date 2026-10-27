@@ -109,11 +109,18 @@
                     android:baselineAligned="false"
                     android:orientation="horizontal">
 
-                    <LinearLayout
-                        android:id="@+id/speedBox"
+                    <!-- The speed and the parked greeting share this slot: "Good evening, <name>" while parked,
+                         the speed fades back in as soon as the car moves. -->
+                    <FrameLayout
+                        android:id="@+id/speedSlot"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
+                        android:layout_weight="1">
+
+                    <LinearLayout
+                        android:id="@+id/speedBox"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
                         android:background="@drawable/ripple_rect"
                         android:orientation="vertical">
 
@@ -158,6 +165,39 @@
                                 android:textSize="13sp" />
                         </LinearLayout>
                     </LinearLayout>
+
+                    <LinearLayout
+                        android:id="@+id/greet"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:layout_marginEnd="12dp"
+                        android:gravity="center_vertical"
+                        android:orientation="vertical"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:id="@+id/greetLabel"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="3dp"
+                            android:fontFamily="sans-serif-medium"
+                            android:letterSpacing="0.16"
+                            android:singleLine="true"
+                            android:textColor="@color/text2"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:id="@+id/greetName"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:ellipsize="end"
+                            android:fontFamily="sans-serif-light"
+                            android:includeFontPadding="false"
+                            android:singleLine="true"
+                            android:textColor="@color/text"
+                            android:textSize="40sp" />
+                    </LinearLayout>
+                    </FrameLayout>
 
                     <LinearLayout
                         android:id="@+id/clockBox"

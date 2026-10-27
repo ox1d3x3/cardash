@@ -34,8 +34,10 @@ jobs:
 
       - name: Build release APK
         run: |
-          SHORT=$(git rev-parse --short HEAD)
-          gradle :app:assembleRelease --no-daemon -PappVersionName="2.4-dev+${SHORT}"
+          # dev builds sort below the release they lead up to: 2.5-dev+abc1234 -> 2050001 (< v2.5 = 2050099)
+          BASE=$(sed -n "s/.*appVersionName') ?: '\([^']*\)'.*/\1/p" app/build.gradle)
+          eval "$(bash tools/version.sh "v${BASE}-dev")"
+          gradle :app:assembleRelease --no-daemon -PappVersionName="${BASE}-dev+$(git rev-parse --short HEAD)" -PappVersionCode="$code"
 
       - uses: actions/upload-artifact@v4
         with:
