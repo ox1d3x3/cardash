@@ -116,6 +116,19 @@ public class MainActivity extends Activity {
     boolean updManual, updInstallWhenReady;
     String updAutoTried;   // the release the parked auto-install already tried, so a cancel isn't retried every 30 s
     TextView ramTv;
+    // optional: a music app's own widget in place of the music card
+    android.appwidget.AppWidgetHost widgetHost;
+    android.appwidget.AppWidgetManager awm;
+    WidgetCard widgetCard;
+    android.appwidget.AppWidgetHostView widgetView;
+    int widgetW, widgetH;
+    boolean widgetListening;
+
+    void widgetListen(boolean on) {
+        if (on == widgetListening) return;
+        widgetListening = on;
+        try { if (on) widgetHost.startListening(); else widgetHost.stopListening(); } catch (Exception ignored) { }
+    }
     View greetBox;
     TextView greetLabel, greetName;
     boolean greetShown, greetWelcome, greetPendingWelcome;
@@ -213,6 +226,7 @@ public class MainActivity extends Activity {
         greetBox = findViewById(R.id.greet);
         greetLabel = findViewById(R.id.greetLabel);
         greetName = findViewById(R.id.greetName);
+        widgetCard = findViewById(R.id.widgetCard);
         refreshTheme(true); // before the first frame, so there is never a wrong-theme flash
         drive.welcome();    // car fades in, lamps flash once
         booster = new Booster(this, sp, ui, listenerCn, new BoostL());
@@ -249,6 +263,12 @@ public class MainActivity extends Activity {
         // touch feedback: everything you can press gives a little (GPU scale, no redraw)
         for (View v : new View[]{playBtn, prevBtn, nextBtn, muteBtn, settingsBtn, camBtn, ramTv}) if (v != null) Anim.press(v, 0.88f);
         mediaCard.setOnTouchListener(new Swipe(artIv, getResources().getDisplayMetrics().density, this::skip)); // swipe = next / previous
+        widgetCard.onLongPress = this::showWidgetMenu;
+        widgetCard.setClipToOutline(true); // the widget gets the card's rounded corners
+        widgetCard.addOnLayoutChangeListener((v, l, t, r, bt, ol, ot, or, ob) -> sizeWidget());
+        awm = android.appwidget.AppWidgetManager.getInstance(this);
+        widgetHost = new android.appwidget.AppWidgetHost(getApplicationContext(), WIDGET_HOST_ID);
+        restoreWidget();
         Anim.press(speedBox, 0.95f);
         if (b == null) { // cold start: the dashboard rises in, card by card
             float d = dp(26);
@@ -332,6 +352,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
+        // widget updates only while the home screen is on show (they queue up and arrive here otherwise)
+        if (widgetView != null) widgetListen(true);
         // Back after 10+ minutes away (ignition off, screen off, a long time in another app): new drive, new greeting
         if (stoppedAt > 0 && SystemClock.elapsedRealtime() - stoppedAt >= NEW_SESSION_MS) queueGreeting(false, 700);
         stoppedAt = 0;
@@ -340,6 +362,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onStop() {
         super.onStop();
+        widgetListen(false);
         stoppedAt = SystemClock.elapsedRealtime();
     }
 
@@ -857,6 +880,7 @@ public class MainActivity extends Activity {
     }
 
     void renderMeta() {
+        if (widgetView != null) return; // the app's widget is showing the track: nothing to draw here
         if (needAccess) { setArt(null); return; }
         MediaMetadata m = ctl == null ? null : ctl.getMetadata();
         setT(appTv, ctl == null ? playerLabel() : labelOf(ctl.getPackageName()));
@@ -971,6 +995,7 @@ public class MainActivity extends Activity {
     }
 
     void renderState() {
+        if (widgetView != null) { ui.removeCallbacks(ticker); return; }
         boolean p = ctl != null && isPlaying(ctl);
         if (p != lastPlaying || !iconsInit) {
             boolean change = iconsInit && p != lastPlaying;
@@ -1474,6 +1499,7 @@ public class MainActivity extends Activity {
         String gu = greetUser();
         labels.add("Greeting:  " + (!greetOn() ? "off" : gu.isEmpty() ? "on  ·  add your name" : "on  ·  " + gu));
         acts.add(this::showGreetSettings);
+        labels.add("Music card:  " + musicCardLabel());                          acts.add(this::showMusicCardMenu);
         labels.add("Music player:  " + playerLabel());                           acts.add(this::pickPlayer);
         labels.add("Theme:  " + THEME_NAMES[themeMode()]);                       acts.add(this::pickTheme);
         labels.add("Car colour:  " + CAR_COLOR_NAMES[carColorIndex()]);          acts.add(this::pickCarColor);
@@ -1679,6 +1705,7 @@ public class MainActivity extends Activity {
         int one = Math.max(1, dp(1));
         drivePanel.setBackground(L.card(dp(20), one));
         mediaCard.setBackground(L.card(dp(20), one));
+        widgetCard.setBackground(L.card(dp(20), one));
         volCard.setBackground(L.card(dp(20), one));
         settingsBtn.setBackground(L.card(dp(20), one));
         settingsBtn.setForeground(L.rippleRect(dp(20)));
@@ -2171,6 +2198,9 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams mlp = (LinearLayout.LayoutParams) mediaCard.getLayoutParams();
         mlp.weight = dash ? 36 : 1;
         mediaCard.setLayoutParams(mlp);
+        LinearLayout.LayoutParams wlp = (LinearLayout.LayoutParams) widgetCard.getLayoutParams();
+        wlp.weight = mlp.weight;
+        widgetCard.setLayoutParams(wlp);
         // compact player under the camera tile
         int pad = dp(dash ? 12 : 16);
         mediaCard.setPadding(pad, pad, pad, pad);
@@ -2724,6 +2754,233 @@ public class MainActivity extends Activity {
 
     void startSafe(Intent i) {
         if (!tryStart(i)) toast("Not available on this unit");
+    }
+
+    // ------------------------------------------------------------------ music card: app widget (optional)
+    //
+    // Android can't show another app's screen inside ours, but it can host the app's own home-screen
+    // widget: Spotify, YouTube Music, AIMP… draw it, Android hands us the result (RemoteViews), and
+    // taps go back to the app. It costs a few MB; the music app itself is running anyway when it plays.
+
+    static final int WIDGET_HOST_ID = 0xCA2D, REQ_WIDGET_BIND = 41, REQ_WIDGET_CONFIG = 42;
+
+    String musicCardLabel() {
+        if (widgetView == null) return "CarDash player";
+        android.appwidget.AppWidgetProviderInfo i = widgetView.getAppWidgetInfo();
+        return i == null ? "app widget" : labelOf(i.provider.getPackageName()) + " widget";
+    }
+
+    void showMusicCardMenu() {
+        String[] items = {
+                "CarDash player" + (widgetView == null ? "   \u2713" : "") + "   (lightest: built in)",
+                "A music app's own widget…" + (widgetView != null ? "   \u2713  " + musicCardLabel() : "")};
+        new AlertDialog.Builder(this, dlg())
+                .setTitle("Music card")
+                .setItems(items, (d, w) -> { if (w == 0) forgetWidget(); else pickWidget(); })
+                .show();
+    }
+
+    void showWidgetMenu() {
+        android.appwidget.AppWidgetProviderInfo i = widgetView == null ? null : widgetView.getAppWidgetInfo();
+        final String pkg = i == null ? null : i.provider.getPackageName();
+        java.util.List<String> labels = new ArrayList<>();
+        java.util.List<Runnable> acts = new ArrayList<>();
+        if (pkg != null) { labels.add("Open " + labelOf(pkg)); acts.add(() -> launch(pkg)); }
+        labels.add("Change widget…"); acts.add(this::pickWidget);
+        labels.add("Back to the CarDash player"); acts.add(this::forgetWidget);
+        new AlertDialog.Builder(this, dlg())
+                .setTitle("Music card  ·  " + musicCardLabel())
+                .setItems(labels.toArray(new String[0]), (d, w) -> acts.get(w).run())
+                .show();
+    }
+
+    void pickWidget() {
+        if (!appsLoaded) { loadApps(this::pickWidget); return; } // for the app icons
+        final java.util.List<android.appwidget.AppWidgetProviderInfo> all = new ArrayList<>();
+        try { all.addAll(awm.getInstalledProviders()); } catch (Exception ignored) { }
+        if (all.isEmpty()) { toast("No app on this head unit offers a widget"); return; }
+        final Set<String> music = musicApps();
+        final Collator col = Collator.getInstance();
+        final Map<String, String> label = new HashMap<>();
+        for (android.appwidget.AppWidgetProviderInfo i : all) {
+            String app = labelOf(i.provider.getPackageName());
+            String w = String.valueOf(i.loadLabel(pm));
+            label.put(i.provider.flattenToString(), w.equalsIgnoreCase(app) ? app : app + "  \u00B7  " + w);
+        }
+        Collections.sort(all, (a, b) -> {
+            boolean ma = music.contains(a.provider.getPackageName()), mb = music.contains(b.provider.getPackageName());
+            if (ma != mb) return ma ? -1 : 1;
+            return col.compare(label.get(a.provider.flattenToString()), label.get(b.provider.flattenToString()));
+        });
+        BaseAdapter ad = new BaseAdapter() {
+            @Override public int getCount() { return all.size(); }
+            @Override public Object getItem(int p) { return all.get(p); }
+            @Override public long getItemId(int p) { return p; }
+            @Override public View getView(int p, View v, ViewGroup parent) {
+                if (v == null) {
+                    LinearLayout l = new LinearLayout(MainActivity.this);
+                    l.setOrientation(LinearLayout.HORIZONTAL);
+                    l.setGravity(Gravity.CENTER_VERTICAL);
+                    l.setPadding(dp(20), dp(10), dp(20), dp(10));
+                    l.addView(new ImageView(MainActivity.this), new LinearLayout.LayoutParams(dp(36), dp(36)));
+                    TextView tv = new TextView(MainActivity.this);
+                    tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+                    tv.setSingleLine(true);
+                    tv.setEllipsize(TextUtils.TruncateAt.END);
+                    tv.setTextColor(look.text);
+                    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                    lp.leftMargin = dp(16);
+                    l.addView(tv, lp);
+                    v = l;
+                }
+                android.appwidget.AppWidgetProviderInfo i = all.get(p);
+                LinearLayout l = (LinearLayout) v;
+                AppEntry e = byPkg.get(i.provider.getPackageName());
+                ((ImageView) l.getChildAt(0)).setImageBitmap(e != null ? e.icon : null);
+                ((TextView) l.getChildAt(1)).setText(label.get(i.provider.flattenToString()));
+                return v;
+            }
+        };
+        new AlertDialog.Builder(this, dlg())
+                .setTitle("Widget for the music card  ·  music apps first")
+                .setAdapter(ad, (d, w) -> bindWidget(all.get(w)))
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    /** Android asks once ("Allow CarDash to create widgets…? Always allow") unless that was already granted. */
+    void bindWidget(android.appwidget.AppWidgetProviderInfo info) {
+        cancelPendingWidget();
+        int id = widgetHost.allocateAppWidgetId();
+        sp.edit().putInt("widgetPending", id).apply();
+        boolean ok;
+        try { ok = awm.bindAppWidgetIdIfAllowed(id, info.getProfile(), info.provider, null); }
+        catch (Exception e) { ok = false; }
+        if (ok) { configureWidget(id); return; }
+        Intent i = new Intent(android.appwidget.AppWidgetManager.ACTION_APPWIDGET_BIND)
+                .putExtra(android.appwidget.AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                .putExtra(android.appwidget.AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, info.provider)
+                .putExtra(android.appwidget.AppWidgetManager.EXTRA_APPWIDGET_PROVIDER_PROFILE, info.getProfile());
+        try {
+            startActivityForResult(i, REQ_WIDGET_BIND);
+        } catch (Exception e) {
+            cancelPendingWidget();
+            new AlertDialog.Builder(this, dlg()).setTitle("Widgets not available")
+                    .setMessage("This head unit's Android doesn't let apps host widgets (the permission screen is missing). "
+                            + "The CarDash player stays on.")
+                    .setPositiveButton("OK", null).show();
+        }
+    }
+
+    void configureWidget(int id) {
+        android.appwidget.AppWidgetProviderInfo info = awm.getAppWidgetInfo(id);
+        if (info == null) { cancelPendingWidget(); toast("That widget isn't available any more"); return; }
+        boolean optional = Build.VERSION.SDK_INT >= 31
+                && (info.widgetFeatures & android.appwidget.AppWidgetProviderInfo.WIDGET_FEATURE_CONFIGURATION_OPTIONAL) != 0;
+        if (info.configure != null && !optional) {
+            try { widgetHost.startAppWidgetConfigureActivityForResult(this, id, 0, REQ_WIDGET_CONFIG, null); return; }
+            catch (Exception ignored) { } // not startable: use the widget as it is
+        }
+        commitWidget(id);
+    }
+
+    void commitWidget(int id) {
+        sp.edit().remove("widgetPending").apply();
+        android.appwidget.AppWidgetProviderInfo info = awm.getAppWidgetInfo(id);
+        if (info == null) { widgetHost.deleteAppWidgetId(id); toast("That widget isn't available any more"); return; }
+        int old = sp.getInt("widgetId", -1);
+        if (old >= 0 && old != id) try { widgetHost.deleteAppWidgetId(old); } catch (Exception ignored) { }
+        sp.edit().putInt("widgetId", id).apply();
+        showWidget(id, info);
+    }
+
+    void cancelPendingWidget() {
+        int p = sp.getInt("widgetPending", -1);
+        if (p >= 0) {
+            try { widgetHost.deleteAppWidgetId(p); } catch (Exception ignored) { }
+            sp.edit().remove("widgetPending").apply();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req != REQ_WIDGET_BIND && req != REQ_WIDGET_CONFIG) return;
+        int id = sp.getInt("widgetPending", -1);
+        if (id < 0) return;
+        if (res != RESULT_OK) { cancelPendingWidget(); return; }
+        if (req == REQ_WIDGET_BIND) configureWidget(id); else commitWidget(id);
+    }
+
+    /** At start-up: put the chosen widget back, and drop any widget ids an interrupted setup left behind. */
+    void restoreWidget() {
+        int id = sp.getInt("widgetId", -1);
+        sp.edit().remove("widgetPending").apply();
+        try {
+            for (int x : widgetHost.getAppWidgetIds()) if (x != id) widgetHost.deleteAppWidgetId(x);
+        } catch (Exception ignored) { }
+        if (id < 0) return;
+        android.appwidget.AppWidgetProviderInfo info = null;
+        try { info = awm.getAppWidgetInfo(id); } catch (Exception ignored) { }
+        if (info == null) { forgetWidget(); return; } // the app was uninstalled
+        showWidget(id, info);
+    }
+
+    void showWidget(int id, android.appwidget.AppWidgetProviderInfo info) {
+        try {
+            android.appwidget.AppWidgetHostView v = widgetHost.createView(this, id, info);
+            if (widgetView != null) widgetCard.removeView(widgetView);
+            widgetView = v;
+            widgetW = widgetH = 0;
+            widgetCard.addView(v, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        } catch (Exception e) {
+            toast("Couldn't show the widget: " + e.getMessage());
+            forgetWidget();
+            return;
+        }
+        ui.removeCallbacks(ticker);
+        mediaCard.setVisibility(View.GONE);
+        widgetCard.setVisibility(View.VISIBLE);
+        widgetListen(true);
+    }
+
+    void forgetWidget() {
+        int id = sp.getInt("widgetId", -1);
+        sp.edit().remove("widgetId").apply();
+        if (id >= 0) try { widgetHost.deleteAppWidgetId(id); } catch (Exception ignored) { }
+        boolean was = widgetView != null;
+        if (widgetView != null) { widgetCard.removeView(widgetView); widgetView = null; }
+        widgetCard.setVisibility(View.GONE);
+        mediaCard.setVisibility(View.VISIBLE);
+        if (was) {
+            widgetListen(false);
+            trackKey = null;
+            renderMeta();
+            renderState();
+        }
+    }
+
+    /** Tell the widget how much room it has, so responsive widgets (Android 12+) pick their best layout. */
+    void sizeWidget() {
+        if (widgetView == null) return;
+        float d = getResources().getDisplayMetrics().density;
+        int w = Math.round((widgetCard.getWidth() - widgetCard.getPaddingLeft() - widgetCard.getPaddingRight()) / d);
+        int h = Math.round((widgetCard.getHeight() - widgetCard.getPaddingTop() - widgetCard.getPaddingBottom()) / d);
+        if (w <= 0 || h <= 0 || (w == widgetW && h == widgetH)) return;
+        widgetW = w;
+        widgetH = h;
+        final android.appwidget.AppWidgetHostView v = widgetView;
+        ui.post(() -> {
+            if (v != widgetView) return;
+            try {
+                if (Build.VERSION.SDK_INT >= 31) {
+                    v.updateAppWidgetSize(new Bundle(), Collections.singletonList(new android.util.SizeF(widgetW, widgetH)));
+                } else {
+                    //noinspection deprecation
+                    v.updateAppWidgetSize(null, widgetW, widgetH, widgetW, widgetH);
+                }
+            } catch (Exception ignored) { }
+        });
     }
 
     // ------------------------------------------------------------------ greeting

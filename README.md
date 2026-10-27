@@ -73,6 +73,7 @@ no third-party libraries, an APK under 0.5 MB, and zero frames drawn when nothin
   evening*. It gives way to the speed the moment you drive off.
 - **Now playing** for any player (AIMP, Spotify, YouTube Music, radio apps…), with any of them as
   your default: album art, big buttons, **swipe to skip**, volume in sync with the hardware knob.
+  Or put **Spotify's / YouTube Music's own widget** in the music card instead.
 - **Dash cam**: live DDPAI front camera over Wi-Fi and the wired rear camera, full screen or as a
   home-screen tile, with Android Auto / CarPlay protection.
 - **RAM optimiser** that is careful by design: phone-link and playing apps are never touched.
@@ -223,6 +224,15 @@ updates itself, so there is nothing to copy over by USB after the first install.
   default player. Music apps (Spotify, YouTube Music, AIMP, Poweramp…) are listed first; AIMP is
   picked automatically if nothing is chosen. Pressing play with nothing playing resumes the last
   player, or opens your default player if that's a different app.
+- **Music card: CarDash player or an app's widget** (*Settings → Music card*). The built-in player
+  is the lightest and works with every app. Alternatively the card can host a music app's own
+  home-screen widget (Spotify, YouTube Music, AIMP…; music apps are listed first), the same way a
+  phone's home screen does: the app draws it and taps go straight to the app. Android asks once to
+  allow CarDash to show widgets. Long-press the widget for *Open app*, *Change widget* or *Back to the
+  CarDash player*. Widget updates are only received while the home screen is visible.
+
+  Showing the app's *full* screen inside the card isn't possible: Android only lets system apps embed
+  another app's window, and split-screen can't include the home screen.
 - **Resume music after start** (opt-in): once per boot, if nothing is playing after about 8 s,
   CarDash presses play for the last music app.
 - **Volume**: slider and mute for the media stream, kept in sync with the hardware knob and wheel
@@ -241,7 +251,7 @@ updates itself, so there is nothing to copy over by USB after the first install.
 - **System bars**: the status bar is hidden on the home screen by default (most head units leave it
   empty); swipe down from the top edge to peek. *Settings → System bars* can show it again or hide
   the navigation bar too.
-- **Settings** (slider icon): updates, greeting, music player, theme, car colour, style, view and number
+- **Settings** (slider icon): updates, greeting, music card, music player, theme, car colour, style, view and number
   plate, units, speed alert, screensaver, RAM optimiser, layout, dash cam, resume music, media
   access, location, system bars, set as Home app, reset dock.
 
@@ -479,6 +489,16 @@ be on the camera's Wi-Fi; close the view and check again.
 Some units restart their stock launcher at boot. Set CarDash as the default launcher in the
 factory settings and disable the stock launcher's auto-start, or press Home once and choose
 *CarDash → Always*.
+
+</details>
+
+<details>
+<summary><b>"Widgets not available" when choosing a music app's widget</b></summary>
+
+Some head-unit firmware removes Android's "allow this app to create widgets" screen, and without it
+Android won't let any launcher host widgets. Keep the CarDash player (it controls Spotify and
+YouTube Music too); with ADB you can grant it once:
+`adb shell appwidget grantbind --package xyz.ox1de.cardash --user 0`.
 
 </details>
 

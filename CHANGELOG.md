@@ -3,6 +3,18 @@
 All notable changes to CarDash. Versions follow `MAJOR.MINOR[.PATCH]`; pre-releases are tagged
 `vX.Y-betaN`. Each `## vX.Y` section below becomes the notes of the matching GitHub release.
 
+## v2.6 — 2026-10-27
+
+### Added
+- **Music card: a music app's own widget** (*Settings → Music card*). Instead of the built-in
+  player, the card can host Spotify's, YouTube Music's, AIMP's or any other app's home-screen
+  widget, sized to the card and clipped to its rounded corners. Music apps are listed first.
+  Android asks once to allow CarDash to show widgets. Long-press the widget for *Open app*,
+  *Change widget* or *Back to the CarDash player*.
+  - Light by design: the widget only receives updates while the home screen is visible, and the
+    built-in player stops all of its own drawing and its progress timer while a widget is shown.
+  - The built-in player stays the default and the lightest option.
+
 ## v2.5 — 2026-10-27
 
 ### Added
