@@ -70,6 +70,9 @@ public class DriveView extends View {
     boolean skyInit;
     /** Chase cam while nothing else moves: clouds drift, stars twinkle, at a gentle 12 fps (not 60). */
     static final long AMBIENT_MS = 83;
+    /** ...and after a minute with nothing else happening, 8 fps: the drift is slow enough that it looks the same. */
+    static final long AMBIENT_IDLE_MS = 125, IDLE_AFTER = 60_000;
+    long busyAt;
     float refMs;
 
     public DriveView(Context c) { this(c, null); }
@@ -164,6 +167,7 @@ public class DriveView extends View {
     public void setActive(boolean a) {
         active = a;
         lastFrame = 0;
+        busyAt = SystemClock.uptimeMillis();
         if (a) kick();
     }
 
@@ -367,10 +371,11 @@ public class DriveView extends View {
 
         if (more && active) {
             lastFrame = now;
+            busyAt = now;
             postInvalidateOnAnimation();
         } else if (active && view == REAR && drawnView == REAR) {
             lastFrame = now;                       // ambient: sky keeps living, cheaply
-            postInvalidateDelayed(AMBIENT_MS);
+            postInvalidateDelayed(now - busyAt > IDLE_AFTER ? AMBIENT_IDLE_MS : AMBIENT_MS);
         } else {
             lastFrame = 0;
         }

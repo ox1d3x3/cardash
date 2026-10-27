@@ -56,6 +56,7 @@ public class ClockView extends View {
     float subKey = -1;
     float dx, dy, drift;
     SimpleDateFormat dateFmt;
+    final Calendar cal = Calendar.getInstance(); // reused: no Calendar allocated per frame
 
     // parked car
     int carStyle = -1, carColor = 0xFFF4F5F7;
@@ -239,6 +240,10 @@ public class ClockView extends View {
     void refreshStrings(Calendar c) {
         int minute = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE);
         if (minute == lastMinute) return;
+        // once a minute: pick up a time-zone change (travel, network time) before formatting
+        c.setTimeZone(java.util.TimeZone.getDefault());
+        c.setTimeInMillis(System.currentTimeMillis());
+        minute = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE);
         lastMinute = minute;
         boolean h24 = DateFormat.is24HourFormat(getContext());
         int h = c.get(Calendar.HOUR_OF_DAY);
@@ -274,7 +279,8 @@ public class ClockView extends View {
 
     @Override
     protected void onDraw(Canvas cv) {
-        Calendar c = Calendar.getInstance();
+        Calendar c = cal;
+        c.setTimeInMillis(System.currentTimeMillis());
         refreshStrings(c);
         int sec = c.get(Calendar.SECOND);
 

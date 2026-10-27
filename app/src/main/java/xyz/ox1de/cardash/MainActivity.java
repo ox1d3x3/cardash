@@ -82,12 +82,13 @@ public class MainActivity extends Activity {
     // index 0 = Auto: white car on the dark theme, black car on the light theme
     static final String[] CAR_COLOR_NAMES = {"Auto (white at night, black by day)", "White", "Silver", "Grey", "Black", "Red", "Blue", "Teal", "Orange", "Beige"};
     static final int[] CAR_COLORS = {0, 0xFFF4F5F7, 0xFFC4C8CE, 0xFF70757D, 0xFF2C2F35, 0xFFC2242C, 0xFF2E5BB8, 0xFF1E8C93, 0xFFE0702A, 0xFFCBB896};
-    static final String[] CAR_STYLE_NAMES = {"Hatchback (2014 Accent hatch)", "Sedan"};
+    static final String[] CAR_STYLE_NAMES = {"Hatchback", "Sedan"};
     static final String[] THEME_NAMES = {"Auto: light 5 am – 6 pm", "Auto: real sunrise / sunset (GPS)", "Always dark", "Always light"};
     static final int[] ALERTS = {0, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130};
 
     final Handler ui = new Handler(Looper.getMainLooper());
-    final ExecutorService bg = Executors.newSingleThreadExecutor();
+    /** Background work (app icons, badge import, …) at background priority: never steals CPU from an animation. */
+    final ExecutorService bg = lowPriority("cardash-bg");
 
     SharedPreferences sp;
     PackageManager pm;
@@ -160,11 +161,14 @@ public class MainActivity extends Activity {
     long artSig;   // fingerprint of the picture on screen: players re-send the same art several times per track
     int artGen;
     /** Album art is scaled to the card's size and colour-picked here, never on the UI thread. */
-    final ExecutorService artEx = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "art");
-        t.setPriority(Thread.MIN_PRIORITY + 1);
-        return t;
-    });
+    final ExecutorService artEx = lowPriority("art");
+
+    static ExecutorService lowPriority(final String name) {
+        return Executors.newSingleThreadExecutor(r -> new Thread(() -> {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
+            r.run();
+        }, name));
+    }
     long duration;
     boolean needAccess, resumed, locating, draggingVol, receiversOn;
     long lastFix;
@@ -1061,8 +1065,15 @@ public class MainActivity extends Activity {
         if (p != lastPlaying || !iconsInit) {
             boolean change = iconsInit && p != lastPlaying;
             lastPlaying = p;
-            playBtn.setImageResource(p ? R.drawable.ic_pause : R.drawable.ic_play);
-            if (change && resumed && !saverOn) Anim.pop(playBtn);
+            if (change && resumed && !saverOn) {
+                // the play triangle morphs into the pause bars (and back), drawn on the render thread
+                Drawable d = getDrawable(p ? R.drawable.avd_play_to_pause : R.drawable.avd_pause_to_play);
+                playBtn.setImageDrawable(d);
+                if (d instanceof android.graphics.drawable.Animatable) ((android.graphics.drawable.Animatable) d).start();
+                Anim.pop(playBtn);
+            } else {
+                playBtn.setImageResource(p ? R.drawable.ic_pause : R.drawable.ic_play);
+            }
         }
         long next = updateProgress();
         ui.removeCallbacks(ticker);
@@ -3667,7 +3678,7 @@ public class MainActivity extends Activity {
         box.addView(head);
 
         TextView blurb = new TextView(this);
-        blurb.setText("A lightweight, Tesla-style home screen for Android car head units.");
+        blurb.setText("A lightweight home screen for Android car head units: fast, smooth and light on memory.");
         blurb.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         blurb.setTextColor(look.text2);
         blurb.setPadding(0, dp(16), 0, dp(8));

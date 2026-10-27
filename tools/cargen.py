@@ -2,7 +2,7 @@
 """
 CarDash car art generator: one model -> Android VectorDrawables (app) + SVG (previews).
 
-Top-down 2014-Accent-style car, original artwork (no badges), viewport 200 x 440, nose at the top.
+Top-down compact hatchback / sedan, original artwork (no badges), viewport 200 x 440, nose at the top.
 Four layers, drawn in this order:
   tyres   fixed colours
   paint   greyscale shading; tinted at runtime with MULTIPLY so any paint colour keeps its shape

@@ -3,6 +3,21 @@
 All notable changes to CarDash. Versions follow `MAJOR.MINOR[.PATCH]`; pre-releases are tagged
 `vX.Y-betaN`. Each `## vX.Y` section below becomes the notes of the matching GitHub release.
 
+## v2.9 — 2026-10-27
+
+### Changed
+- Wording: CarDash is described simply as a **lightweight** home screen everywhere (app, About,
+  README, changelog, tools); references to other car brands' styles are gone. The car styles are
+  just *Hatchback* and *Sedan*.
+- **Play / pause morphs**: the play triangle turns into the pause bars (and back) instead of
+  swapping icons. Animated on the render thread.
+- **Background work never competes with animations**: app icons, album art, badge import and car
+  rendering run at Android's background priority.
+- **Chase-cam sky while idle**: after a minute with nothing else moving, the drifting clouds and
+  twinkling stars tick at 8 fps instead of 12 (looks the same, a third less work while parked).
+- **Screensaver clock**: reuses one calendar instead of creating one per frame (matters while the
+  cat is moving), and still follows time-zone changes.
+
 ## v2.8 — 2026-10-27
 
 ### Added
@@ -129,7 +144,7 @@ All notable changes to CarDash. Versions follow `MAJOR.MINOR[.PATCH]`; pre-relea
 ## v1.9
 
 ### Added
-- Glossy vector car art: **Hatchback** (after the 2014 Accent hatch) and **Sedan**.
+- Glossy vector car art: **Hatchback** and **Sedan**.
 - Night lighting (6 pm – 5 am): LED headlamps power on, beams light the road, tail lamps glow.
 - Brake lights in the daytime when the speed drops.
 - Parked car on the screensaver: rolls into a bay, brakes and flashes its indicators as it locks.
@@ -137,7 +152,7 @@ All notable changes to CarDash. Versions follow `MAJOR.MINOR[.PATCH]`; pre-relea
 
 ## v1.0 – v1.8
 
-- Tesla-style home screen: GPS speed, clock, top-down car, now-playing card with album art,
+- Lightweight home screen: GPS speed, clock, top-down car, now-playing card with album art,
   volume, 6-slot dock and app drawer.
 - Auto day / night theme (fixed hours or real sunrise / sunset), speed alert, screensaver,
   Standard and Dash cam layouts.

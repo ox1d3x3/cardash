@@ -274,11 +274,10 @@ final class CarArt {
     static Spec spec(int style) { return style == SEDAN ? SEDAN_SPEC : HATCH_SPEC; }
 
     /** One low-priority thread for all car rendering (dashboard + screensaver). */
-    static final ExecutorService EX = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "car-art");
-        t.setPriority(Thread.MIN_PRIORITY + 1);
-        return t;
-    });
+    static final ExecutorService EX = Executors.newSingleThreadExecutor(r -> new Thread(() -> {
+        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
+        r.run();
+    }, "car-art"));
 
     /**
      * @param s   pixels per artwork unit
