@@ -67,6 +67,11 @@ public class ClockView extends View {
     float s, carCx, carL, carT, bayL, bayR, bayTop, bayBot, lineW, glowR;
     long introAt = -1;
 
+    // the cat that comes to sleep on the roof
+    final SleepyCat cat = new SleepyCat();
+    boolean catOn = true;
+    static final long CAT_AFTER = 1300; // ms after the car has locked
+
     public ClockView(Context c) { this(c, null); }
 
     public ClockView(Context c, AttributeSet a) {
@@ -117,6 +122,22 @@ public class ClockView extends View {
     public void stop() {
         running = false;
         removeCallbacks(tickR);
+        cat.reset();
+    }
+
+    public void setCat(boolean on) {
+        catOn = on;
+        if (!on) cat.reset();
+    }
+
+    /**
+     * A tap while the cat is there: it startles and runs off, then {@code whenGone} runs.
+     * @return false if there's no cat (yet): wake straight away as usual
+     */
+    public boolean catTap(Runnable whenGone) {
+        if (!running || !split() || !cat.tap(SystemClock.uptimeMillis(), () -> post(whenGone))) return false;
+        invalidate();
+        return true;
     }
 
     public void setNowPlaying(String s) {
@@ -365,8 +386,17 @@ public class ClockView extends View {
             glow(cv, tL - 2 * s, tailY - 10 * s, amber);
             glow(cv, tR + 2 * s, tailY - 10 * s, amber);
         }
+        // the cat: walks on after the lock flash, sleeps on the roof
+        long catNext = -1;
+        if (catOn && running) {
+            if (!cat.started() && introAt >= 0) cat.start(introAt + INTRO_MS + CAT_AFTER);
+            float roofY = carT + (spec.nose + 0.6f * (spec.tail - spec.nose)) * s;
+            catNext = cat.draw(cv, now, carCx, roofY, bayR, s, getWidth(), h);
+        }
         cv.restoreToCount(sv);
-        if (intro && running) postInvalidateOnAnimation();
+        if (!running) return;
+        if (intro || catNext == 0) postInvalidateOnAnimation();
+        else if (catNext > 0 && catNext < 1000) postInvalidateDelayed(catNext);
     }
 
     void glow(Canvas cv, float x, float y, Paint p) {

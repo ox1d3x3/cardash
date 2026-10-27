@@ -1568,12 +1568,16 @@ public class MainActivity extends Activity {
         labels.add("Car view:  " + (carView() == DriveView.REAR ? "behind the car" : "top-down")); acts.add(this::pickCarView);
         final String pl = plateText();
         labels.add("Number plate:  " + (pl.isEmpty() ? "blank" : pl));            acts.add(this::pickPlate);
+        labels.add("Rear badge:  " + badgeLabel());                               acts.add(this::showBadgeMenu);
         labels.add("Speed units:  " + unit);                                     acts.add(this::toggleUnits);
         labels.add("Speed alert:  " + (alert == 0 ? "off" : alert + " " + unit)); acts.add(this::pickAlert);
         labels.add("Screensaver:  " + (saverMin == 0 ? "off" : "after " + saverMin + " min idle")); acts.add(this::pickSaver);
         final boolean saverCar = sp.getBoolean("saverCar", true);
         labels.add("Parked car on screensaver:  " + (saverCar ? "on" : "off"));
         acts.add(() -> { sp.edit().putBoolean("saverCar", !saverCar).apply(); applyCar(); toast("Parked car on screensaver: " + (!saverCar ? "on" : "off")); });
+        final boolean saverCat = sp.getBoolean("saverCat", true);
+        labels.add("Sleepy cat on the parked car:  " + (saverCat ? "on" : "off"));
+        acts.add(() -> { sp.edit().putBoolean("saverCat", !saverCat).apply(); applyCar(); toast("Sleepy cat: " + (!saverCat ? "on" : "off")); });
         labels.add("RAM optimiser…");                                            acts.add(this::showOptimizer);
         labels.add("Layout:  " + (dashLayout() ? "Dash cam" : "Standard"));       acts.add(this::pickLayout);
         labels.add("Dash cam…");                                                 acts.add(this::showCamSettings);
@@ -1693,8 +1697,99 @@ public class MainActivity extends Activity {
     }
 
     void applyCar() {
+        applyBadge();
         drive.setLook(carView(), carStyle(), carColor(), look.light, plateText(), look.card);
         saver.setCar(sp.getBoolean("saverCar", true) ? carStyle() : -1, sp.getInt("carColor", 0));
+        saver.setCat(sp.getBoolean("saverCat", true));
+    }
+
+    // ------------------------------------------------------------------ boot-lid badge (owner's own)
+
+    static final int REQ_BADGE = 43;
+    Bitmap badgeImg;
+    int badgeImgVer = -1;
+
+    int badgeMode() { return sp.getInt("badgeMode", CarArt.Badge.NONE); }
+
+    String badgeLabel() {
+        switch (badgeMode()) {
+            case CarArt.Badge.TEXT: return sp.getString("badgeText", "");
+            case CarArt.Badge.IMAGE: return "your image" + (sp.getBoolean("badgeChrome", true) ? ", chrome" : "");
+            default: return "none";
+        }
+    }
+
+    /** Hands the car view the current badge; the image is read from disk only when it changed. */
+    void applyBadge() {
+        final int mode = badgeMode(), imgVer = sp.getInt("badgeImgVer", 0);
+        final String text = sp.getString("badgeText", "");
+        final boolean chrome = sp.getBoolean("badgeChrome", true);
+        final int ver = java.util.Arrays.hashCode(new Object[]{mode, text, chrome, imgVer});
+        if (mode != CarArt.Badge.IMAGE) { drive.setBadge(new CarArt.Badge(mode, text, null, chrome, ver)); return; }
+        if (badgeImgVer == imgVer && badgeImg != null) { drive.setBadge(new CarArt.Badge(mode, text, badgeImg, chrome, ver)); return; }
+        // a small PNG (max 256 px): read it right here so the car is rendered once, with the badge on
+        badgeImg = Badges.load(this);
+        badgeImgVer = imgVer;
+        drive.setBadge(new CarArt.Badge(badgeImg == null ? CarArt.Badge.NONE : mode, text, badgeImg, chrome, ver));
+    }
+
+    void showBadgeMenu() {
+        final int mode = badgeMode();
+        final boolean chrome = sp.getBoolean("badgeChrome", true);
+        java.util.List<String> labels = new ArrayList<>();
+        java.util.List<Runnable> acts = new ArrayList<>();
+        labels.add("None" + (mode == CarArt.Badge.NONE ? "   \u2713" : ""));
+        acts.add(() -> setBadgeMode(CarArt.Badge.NONE));
+        labels.add("Chrome lettering…" + (mode == CarArt.Badge.TEXT ? "   \u2713  " + sp.getString("badgeText", "") : "")
+                + "   (e.g. your model name)");
+        acts.add(() -> editText("Badge lettering (up to 12 characters)", sp.getString("badgeText", ""), v -> {
+            String t = v.trim();
+            if (t.length() > 12) t = t.substring(0, 12);
+            sp.edit().putString("badgeText", t).apply();
+            setBadgeMode(t.isEmpty() ? CarArt.Badge.NONE : CarArt.Badge.TEXT);
+        }));
+        labels.add("Your own badge image…" + (mode == CarArt.Badge.IMAGE ? "   \u2713" : "") + "   (PNG or JPG from this head unit)");
+        acts.add(this::pickBadgeImage);
+        if (mode == CarArt.Badge.IMAGE) {
+            labels.add("Image finish:  " + (chrome ? "chrome" : "original colours"));
+            acts.add(() -> { sp.edit().putBoolean("badgeChrome", !chrome).apply(); applyBadge(); });
+        }
+        new AlertDialog.Builder(this, dlg())
+                .setTitle("Badge on the back of the car  ·  shows in the \"behind the car\" view")
+                .setItems(labels.toArray(new String[0]), (d, w) -> acts.get(w).run())
+                .show();
+    }
+
+    void setBadgeMode(int m) {
+        sp.edit().putInt("badgeMode", m).apply();
+        applyBadge();
+        if (m != CarArt.Badge.NONE && carView() != DriveView.REAR) toast("Set Car view to \"behind the car\" to see the badge");
+    }
+
+    /** Any image the owner has on the unit: a file manager or gallery hands it over, CarDash cuts it out. */
+    void pickBadgeImage() {
+        Intent open = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*");
+        Intent get = new Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*");
+        for (Intent i : new Intent[]{open, get}) {
+            try { startActivityForResult(i, REQ_BADGE); return; } catch (Exception ignored) { }
+        }
+        new AlertDialog.Builder(this, dlg()).setTitle("No file picker")
+                .setMessage("This head unit has no app for choosing a file. Install a file manager (or a gallery app), "
+                        + "copy your badge image (PNG with a transparent background is best) to the unit, and try again.")
+                .setPositiveButton("OK", null).show();
+    }
+
+    void onBadgePicked(final Uri uri) {
+        toast("Preparing your badge…");
+        bg.execute(() -> {
+            final String err = Badges.importImage(this, uri);
+            ui.post(() -> {
+                if (err != null) { toast(err); return; }
+                sp.edit().putInt("badgeImgVer", sp.getInt("badgeImgVer", 0) + 1).apply();
+                setBadgeMode(CarArt.Badge.IMAGE);
+                toast("Badge added");
+            });
+        });
     }
 
     // ------------------------------------------------------------------ theme
@@ -2535,7 +2630,8 @@ public class MainActivity extends Activity {
     public boolean dispatchTouchEvent(MotionEvent e) {
         int a = e.getActionMasked();
         if (saverOn && a == MotionEvent.ACTION_DOWN) {
-            hideSaver();
+            // the cat's asleep on the roof: it runs off first, then the dashboard comes back
+            if (!saver.catTap(this::hideSaver)) hideSaver();
             swallowTouch = true;
         }
         if (swallowTouch) {
@@ -3004,6 +3100,10 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if (req == REQ_BADGE) {
+            if (res == RESULT_OK && data != null && data.getData() != null) onBadgePicked(data.getData());
+            return;
+        }
         if (req != REQ_WIDGET_BIND && req != REQ_WIDGET_CONFIG) return;
         int id = sp.getInt("widgetPending", -1);
         if (id < 0) return;

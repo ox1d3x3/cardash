@@ -67,7 +67,8 @@ no third-party libraries, an APK under 0.5 MB, and zero frames drawn when nothin
   sunset to sunrise); **brake lights pop only on a sudden speed drop**, never on gentle slowing.
 - **Living sky**: sun, clouds and blue sky by day; moon, twinkling stars, shooting stars and lit
   windows at night, with a dusk transition.
-- **Your number plate** on the back of the car.
+- **Your number plate** on the back of the car, and **your own badge**: chrome lettering you type,
+  or an image you load (CarDash cuts out a plain background and can give it a chrome finish).
 - **Big speed and clock**, a speed alert, km/h or mph.
 - **A greeting with your name**: *Welcome* after start-up, then *Good morning / afternoon /
   evening*. It gives way to the speed the moment you drive off.
@@ -77,7 +78,8 @@ no third-party libraries, an APK under 0.5 MB, and zero frames drawn when nothin
 - **Dash cam**: live DDPAI front camera over Wi-Fi and the wired rear camera, full screen or as a
   home-screen tile, with Android Auto / CarPlay protection.
 - **RAM optimiser** that is careful by design: phone-link and playing apps are never touched.
-- **Screensaver**: the car parks and locks, beside a ring clock.
+- **Screensaver**: the car parks and locks, beside a ring clock, and a **sleepy cat** wanders in,
+  hops onto the roof and curls up. Tap and it bolts, then the dashboard comes back.
 - **Auto day / night theme** that switches instantly, with no restart and no flash.
 - **Updates itself from GitHub**: a yellow update icon appears when there's a new release; one tap
   downloads and installs it.
@@ -174,6 +176,14 @@ updates itself, so there is nothing to copy over by USB after the first install.
 - **Paint colour**: *Auto* (white car on the dark theme, black on the light theme) or a fixed
   colour. Changes cross-fade, including the automatic switch at 6 pm / 5 am.
 - **Number plate** (*Settings → Number plate*): letters, digits, space, dash and dot, up to 10.
+- **Rear badge** (*Settings → Rear badge*), on the boot lid under the light bar, chase cam only:
+  - **Chrome lettering**: up to 12 characters you type, e.g. your model name.
+  - **Your own badge image**: any PNG or JPG on the head unit (picked with its file manager or
+    gallery). A plain background (white, black, any flat colour) is cut away automatically, empty
+    margins are trimmed and it's stored at most 256 px. Finish: **chrome** (default) or **original
+    colours**. A PNG with a transparent background gives the cleanest result.
+  - It's painted into the car picture once, so it costs nothing per frame. CarDash itself ships no
+    badges or brand logos; what you load stays on your unit.
 - **Greeting** (*Settings → Greeting*): the first time after install or after the head unit boots,
   the speed slot says *Welcome, &lt;your name&gt;*, which turns into *Good morning* (5:00–11:59),
   *Good afternoon* (12:00–16:59) or *Good evening* (17:00–4:59). After the unit has slept, been
@@ -215,6 +225,12 @@ updates itself, so there is nothing to copy over by USB after the first install.
   Parked car on screensaver* turns the car off. Any touch wakes the dashboard without pressing what's
   underneath. Also available as Android's system screensaver ("CarDash Clock") where the unit has
   that menu.
+- **Sleepy cat** (*Settings → Sleepy cat on the parked car*, on by default): a moment after the car
+  locks, a ginger tabby walks in, stops beside the car, wiggles, jumps onto the roof, turns round
+  once and curls up to sleep, breathing, with little z's drifting up. Tap the screen and it startles
+  (!), leaps off and runs away across the clock, then the dashboard comes back. It's all vector
+  shapes: full frame rate only while it's moving (about 6 s in, 1.3 s out), 10 fps while it sleeps,
+  and the clock stays at one redraw per second otherwise.
 
 </details>
 
@@ -256,7 +272,7 @@ updates itself, so there is nothing to copy over by USB after the first install.
   empty); swipe down from the top edge to peek. *Settings → System bars* can show it again or hide
   the navigation bar too.
 - **Settings** (slider icon): updates, greeting, music card, music player, theme, car colour, style, view and number
-  plate, units, speed alert, screensaver, RAM optimiser, layout, dash cam, resume music, media
+  plate, rear badge, units, speed alert, screensaver, sleepy cat, RAM optimiser, layout, dash cam, resume music, media
   access, location, system bars, set as Home app, reset dock, About CarDash (version, developer
   Mahabub Subhany / [ox1d3x3](https://github.com/ox1d3x3), source code, update check).
 

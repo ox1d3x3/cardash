@@ -16,6 +16,7 @@ public class ClockDream extends DreamService {
         clock = new ClockView(this);
         SharedPreferences sp = getSharedPreferences("cardash", MODE_PRIVATE);
         clock.setCar(sp.getBoolean("saverCar", true) ? sp.getInt("carStyle", CarArt.HATCH) : -1, sp.getInt("carColor", 0));
+        clock.setCat(sp.getBoolean("saverCat", true));
         setContentView(clock);
     }
 

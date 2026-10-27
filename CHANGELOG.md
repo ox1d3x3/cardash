@@ -3,6 +3,18 @@
 All notable changes to CarDash. Versions follow `MAJOR.MINOR[.PATCH]`; pre-releases are tagged
 `vX.Y-betaN`. Each `## vX.Y` section below becomes the notes of the matching GitHub release.
 
+## v2.8 — 2026-10-27
+
+### Added
+- **Sleepy cat on the screensaver.** A moment after the parked car locks, a ginger tabby walks in,
+  wiggles, jumps onto the roof, turns round and curls up asleep (breathing, drifting z's). Tap the
+  screen: it startles, leaps off and runs away across the clock, then the dashboard returns.
+  *Settings → Sleepy cat on the parked car* turns it off. Smooth only while it moves, 10 fps asleep.
+- **Rear badge** (*Settings → Rear badge*), on the boot lid in the chase-cam view: chrome lettering
+  you type (e.g. your model name), or your own image from the head unit, with its plain background
+  cut away automatically and a chrome or original-colour finish. Painted into the car picture once:
+  no per-frame cost. CarDash ships no badges or brand logos of its own.
+
 ## v2.7 — 2026-10-27
 
 ### Added

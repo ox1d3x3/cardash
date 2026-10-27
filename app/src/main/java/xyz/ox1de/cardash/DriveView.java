@@ -49,6 +49,7 @@ public class DriveView extends View {
     Bitmap car, oldCar, headLit, tailLit; // TOP: headLit / tailLit = lamps on. REAR: headLit = stop lamp
     int carColor = 0xFFF2F3F5, style = CarArt.HATCH, view = TOP, bg = 0xFF131519;
     String plate = "";
+    CarArt.Badge badge;  // the owner's boot-lid badge (chase cam only)
     volatile int gen;
     CarArt.Spec spec = CarArt.spec(CarArt.HATCH);
     CarArt.RearSpec rspec = CarArt.WHITE_REAR;  // rear view: geometry of the art currently on screen
@@ -131,6 +132,13 @@ public class DriveView extends View {
     }
 
     public void setAppearance(int st, int color, boolean l) { setLook(view, st, color, l, plate, bg); }
+
+    /** Boot-lid badge for the chase cam; re-renders only if it actually changed. */
+    public void setBadge(CarArt.Badge b) {
+        int was = badge == null ? -1 : badge.ver, now = b == null ? -1 : b.ver;
+        badge = b;
+        if (was != now && view == REAR && car != null) rebuildCar();
+    }
 
     public void setCarColor(int c) { setLook(view, style, c, light, plate, bg); }
 
@@ -240,10 +248,11 @@ public class DriveView extends View {
         final int pd = Math.round((v == REAR ? 16 : 14) * s);
         final boolean lb = light;
         final String pl = plate;
+        final CarArt.Badge bd = badge;
         final Context ctx = getContext();
         CarArt.EX.execute(() -> {
             if (g != gen) return; // superseded before it started: skip the work
-            final CarArt.Set set = v == REAR ? CarArt.renderRear(ctx, st, col, sc, pd, lb, pl)
+            final CarArt.Set set = v == REAR ? CarArt.renderRear(ctx, st, col, sc, pd, lb, pl, bd)
                     : CarArt.renderSet(ctx, st, col, sc, pd, lb, true, true);
             post(() -> {
                 if (g != gen) return; // a newer request superseded this one

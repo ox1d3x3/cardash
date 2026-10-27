@@ -4,9 +4,11 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BlurMaskFilter;
 import android.graphics.Canvas;
+import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.PorterDuff;
 import android.graphics.RectF;
+import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 
@@ -98,8 +100,88 @@ final class CarArt {
         return android.graphics.BitmapFactory.decodeResource(ctx.getResources(), res, o);
     }
 
-    /** Rear car: body (shadow, art, optional colour, number plate) + lamps-on band. */
-    static Set renderRear(Context ctx, int style, int color, float s, int pad, boolean lightBg, String plate) {
+    /**
+     * The owner's own badge on the boot lid: their chosen image (cut out, see Badges) or chrome
+     * lettering they type. CarDash ships no badges or logos of its own.
+     */
+    static final class Badge {
+        static final int NONE = 0, TEXT = 1, IMAGE = 2;
+        final int mode;
+        final String text;
+        final Bitmap image;
+        final boolean chrome;
+        final int ver;      // changes whenever the badge does, so the car is re-rendered once
+        Badge(int mode, String text, Bitmap image, boolean chrome, int ver) {
+            this.mode = mode; this.text = text == null ? "" : text; this.image = image; this.chrome = chrome; this.ver = ver;
+        }
+        boolean shows() { return (mode == TEXT && !text.trim().isEmpty()) || (mode == IMAGE && image != null); }
+    }
+
+    /** Centre of the flat boot-lid panel under the light bar (viewport units), where badges sit. */
+    static float badgeY(RearSpec sp) { return sp == BLACK_REAR ? 114f : 112f; }
+
+    static final int[] CHROME = {0xFFFFFFFF, 0xFFD6DAE0, 0xFF858B94, 0xFFC8CDD4, 0xFFF4F6F8};
+    static final float[] CHROME_AT = {0f, 0.42f, 0.52f, 0.64f, 1f};
+
+    static void drawBadge(Canvas c, RearSpec sp, float s, Badge bd) {
+        if (bd == null || !bd.shows()) return;
+        float cx = RW / 2f * s, cy = badgeY(sp) * s;
+        if (bd.mode == Badge.TEXT) {
+            String text = bd.text.trim();
+            Paint t = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
+            t.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            t.setLetterSpacing(0.22f);
+            t.setTextAlign(Paint.Align.CENTER);
+            float size = 9.6f * s, maxW = 80 * s;
+            t.setTextSize(size);
+            float tw = t.measureText(text);
+            if (tw > maxW) { size *= maxW / tw; t.setTextSize(size); }
+            Paint.FontMetrics fm = t.getFontMetrics();
+            float base = cy - (fm.ascent + fm.descent) / 2f, top = base + fm.ascent * 0.72f;
+            Paint shadow = new Paint(t);
+            shadow.setColor(0x99000000);
+            shadow.setMaskFilter(new BlurMaskFilter(Math.max(0.5f, 0.6f * s), BlurMaskFilter.Blur.NORMAL));
+            c.drawText(text, cx, base + 0.55f * s, shadow);
+            Paint edge = new Paint(t);
+            edge.setStyle(Paint.Style.STROKE);
+            edge.setStrokeWidth(Math.max(0.6f, 0.35f * s));
+            edge.setColor(0x73000000);
+            c.drawText(text, cx, base, edge);
+            t.setShader(new LinearGradient(0, top, 0, base, CHROME, CHROME_AT, Shader.TileMode.CLAMP));
+            c.drawText(text, cx, base, t);
+            return;
+        }
+        Bitmap img = bd.image;
+        float k = Math.min(42 * s / img.getWidth(), 19 * s / img.getHeight());
+        float w = img.getWidth() * k, h = img.getHeight() * k;
+        RectF dst = new RectF(cx - w / 2f, cy - h / 2f, cx + w / 2f, cy + h / 2f);
+        // a soft shadow under the badge, from its own shape: it sits on the panel instead of floating
+        Bitmap a = img.extractAlpha();
+        Paint sh = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
+        sh.setColor(0x8C000000);
+        sh.setMaskFilter(new BlurMaskFilter(Math.max(0.5f, 0.7f * s), BlurMaskFilter.Blur.NORMAL));
+        c.drawBitmap(a, null, new RectF(dst.left, dst.top + 0.6f * s, dst.right, dst.bottom + 0.6f * s), sh);
+        a.recycle();
+        Paint ip = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
+        if (!bd.chrome) { c.drawBitmap(img, null, dst, ip); return; }
+        // chrome finish: the badge's own light and dark, desaturated and brightened, under a chrome band
+        android.graphics.ColorMatrix cm = new android.graphics.ColorMatrix();
+        cm.setSaturation(0f);
+        android.graphics.ColorMatrix lift = new android.graphics.ColorMatrix(new float[]{
+                1.15f, 0, 0, 0, 22, 0, 1.15f, 0, 0, 22, 0, 0, 1.15f, 0, 22, 0, 0, 0, 1, 0});
+        cm.postConcat(lift);
+        ip.setColorFilter(new android.graphics.ColorMatrixColorFilter(cm));
+        int sv = c.saveLayer(dst, null);
+        c.drawBitmap(img, null, dst, ip);
+        Paint band = new Paint();
+        band.setShader(new LinearGradient(0, dst.top, 0, dst.bottom, CHROME, CHROME_AT, Shader.TileMode.CLAMP));
+        band.setXfermode(new android.graphics.PorterDuffXfermode(PorterDuff.Mode.MULTIPLY)); // keeps the badge's alpha
+        c.drawRect(dst, band);
+        c.restoreToCount(sv);
+    }
+
+    /** Rear car: body (shadow, art, optional colour, badge, number plate) + lamps-on band. */
+    static Set renderRear(Context ctx, int style, int color, float s, int pad, boolean lightBg, String plate, Badge badge) {
         RearSpec sp = rearFor(color);
         int cw = Math.max(1, Math.round(RW * s)), ch = Math.max(1, Math.round(RH * s));
         Bitmap b = Bitmap.createBitmap(cw + pad * 2, ch + pad * 2, Bitmap.Config.ARGB_8888);
@@ -125,6 +207,7 @@ final class CarArt {
         Bitmap gloss = decode(ctx, sp.gloss, cw);             // clearcoat: over the paint, never tinted
         c.drawBitmap(gloss, null, dst, fp);
         gloss.recycle();
+        drawBadge(c, sp, s, badge);
         if (plate != null && !plate.trim().isEmpty()) drawPlate(c, sp.plate, s, plate.trim());
         b.prepareToDraw();
 
