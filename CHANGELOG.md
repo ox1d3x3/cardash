@@ -3,6 +3,19 @@
 All notable changes to CarDash. Versions follow `MAJOR.MINOR[.PATCH]`; pre-releases are tagged
 `vX.Y-betaN`. Each `## vX.Y` section below becomes the notes of the matching GitHub release.
 
+## v3.1 — 2026-10-27
+
+### Changed
+- **Colours that hold up on head-unit screens.** Dark theme: true black background, cards lifted
+  clearly off it, visible outlines, brighter text and a brighter blue. Light theme: a grey
+  background with off-white cards instead of pure white (which blooms and washes out), darker text,
+  stronger outlines, a deeper blue. The screensaver's dim ticks and date are a touch brighter too.
+- **Back and Recent apps moved to All apps.** They're no longer on the dashboard. Open All apps and
+  the dock stays on screen underneath it, with Back and Recent apps on its left and the grid key
+  turned into a close key. Launching from the dock or starting the screensaver closes All apps.
+- Menus that are just lists (Settings, Updates, Greeting, Music card, Rear badge, Dash cam, RAM
+  optimiser) have a **Close** button, for head units without a system Back key.
+
 ## v3.0 — 2026-10-27
 
 ### Added

@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="bg">#FF07080A</color>
-    <color name="card">#FF131519</color>
-    <color name="card_hi">#FF1B1E23</color>
-    <color name="line">#FF23262C</color>
-    <color name="text">#FFF2F3F5</color>
-    <color name="text2">#FF8B919A</color>
-    <color name="text3">#FF565B63</color>
-    <color name="accent">#FF3E6AE1</color>
+    <color name="bg">#FF000000</color>
+    <color name="card">#FF181B21</color>
+    <color name="card_hi">#FF23272E</color>
+    <color name="line">#FF343A43</color>
+    <color name="text">#FFFFFFFF</color>
+    <color name="text2">#FFAAB1BB</color>
+    <color name="text3">#FF747B86</color>
+    <color name="accent">#FF4F82FF</color>
 
     <string name="app_name">CarDash</string>
     <string name="keys_label">CarDash buttons (Back, Recent apps…)</string>

@@ -32,7 +32,7 @@ import java.util.Locale;
  */
 public class ClockView extends View {
 
-    static final int BG = 0xFF000000, DIM = 0xFF1C2026, ACC1 = 0xFF3E6AE1, ACC2 = 0xFF4FD1FF;
+    static final int BG = 0xFF000000, DIM = 0xFF262B33, ACC1 = 0xFF4F82FF, ACC2 = 0xFF4FD1FF;
     static final long ROLL_MS = 1500, LOCK_AT = 1650, INTRO_MS = 2700;
 
     final Paint tick = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -91,7 +91,7 @@ public class ClockView extends View {
         time.setColor(0xFFF2F3F5);
         time.setTextAlign(Paint.Align.CENTER);
         small.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        small.setColor(0xFF8B919A);
+        small.setColor(0xFF9CA3AD);
         small.setTextAlign(Paint.Align.CENTER);
         small.setLetterSpacing(0.22f);
         sub.setColor(0xFFC9CDD3);

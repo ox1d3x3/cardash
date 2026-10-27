@@ -512,7 +512,7 @@ public class MainActivity extends Activity {
         }
         if (mainView.getPaddingTop() != t || mainView.getPaddingBottom() != b || mainView.getPaddingLeft() != l || mainView.getPaddingRight() != r) {
             mainView.setPadding(l, t, r, b);
-            drawer.setPadding(l, t, r, b);
+            drawer.setPadding(l, t, r, 0);   // it ends above the dock, which already clears the nav bar
         }
     }
 
@@ -1399,7 +1399,7 @@ public class MainActivity extends Activity {
         sp.edit().putString("mru", TextUtils.join(",", l)).apply();
     }
 
-    /** Back on the home screen: close the drawer, else go back to the app you were last in. */
+    /** Back (on the dock while All apps is open): close it, back to the dashboard. */
     void navBack() {
         if (drawerOpen) { hideDrawer(); return; }
         java.util.List<String> r = recents();
@@ -1588,11 +1588,16 @@ public class MainActivity extends Activity {
 
     void showDrawer() {
         if (!appsLoaded) loadApps(null);
+        // the drawer stops above the dock: the dock (Back, Recent apps, close) stays on screen
+        FrameLayout.LayoutParams dl = (FrameLayout.LayoutParams) drawer.getLayoutParams();
+        int below = dock.getHeight() + mainView.getPaddingBottom();
+        if (dl.bottomMargin != below) { dl.bottomMargin = below; drawer.setLayoutParams(dl); }
         drawerOpen = true;
+        dockForDrawer(true);
         drawer.animate().cancel();
         drawer.setAlpha(0f);
-        drawer.setScaleX(1.04f);
-        drawer.setScaleY(1.04f);
+        drawer.setScaleX(1.02f);
+        drawer.setScaleY(1.02f);
         drawer.setVisibility(View.VISIBLE);
         drive.setActive(false); // hidden behind the drawer: don't animate it
         // settles in from slightly zoomed: one GPU layer, composited, nothing re-drawn per frame
@@ -1603,6 +1608,7 @@ public class MainActivity extends Activity {
     void hideDrawer() {
         if (!drawerOpen) return;
         drawerOpen = false;
+        dockForDrawer(false);
         drawer.animate().cancel();
         drive.setActive(resumed && !saverOn);
         if (resumed) {
@@ -1686,6 +1692,25 @@ public class MainActivity extends Activity {
     }
 
     int dockBtn;   // button size for the current dock width
+    View keyBack, keyRecents;
+    ImageButton allBtn;
+
+    /** All apps open: Back + Recent apps fade in on the dock and the apps key becomes a close key. */
+    void dockForDrawer(boolean open) {
+        if (allBtn != null) allBtn.setImageResource(open ? R.drawable.ic_close : R.drawable.ic_apps);
+        for (View k : new View[]{keyBack, keyRecents}) {
+            if (k == null) continue;
+            k.animate().cancel();
+            if (open) {
+                k.setVisibility(View.VISIBLE);
+                k.setAlpha(0f);
+                k.animate().alpha(1f).setStartDelay(60).setDuration(180).setInterpolator(Anim.OUT).withLayer().start();
+            } else {
+                k.animate().alpha(0f).setStartDelay(0).setDuration(120).withLayer()
+                        .withEndAction(() -> { if (!drawerOpen) k.setVisibility(View.INVISIBLE); }).start();
+            }
+        }
+    }
 
     void buildDock() {
         ensureDockDefaults();
@@ -1695,8 +1720,14 @@ public class MainActivity extends Activity {
         int avail = (dock.getWidth() > 0 ? dock.getWidth() : getResources().getDisplayMetrics().widthPixels)
                 - dock.getPaddingLeft() - dock.getPaddingRight() - dp(24);
         dockBtn = Math.max(dp(44), Math.min(dp(66), avail / (SLOTS + 5) - dp(14)));
-        dock.addView(sysKey(R.drawable.ic_nav_back, "Back to the last app", v -> navBack(), v -> { showKeysPanel(); return true; }));
-        dock.addView(sysKey(R.drawable.ic_nav_recents, "Recent apps", v -> showRecents(), null));
+        // Back + Recent apps: shown only while All apps is open (the dock stays visible under it);
+        // on the dashboard they keep their space but are hidden, so nothing shifts when they appear
+        keyBack = sysKey(R.drawable.ic_nav_back, "Back", v -> navBack(), v -> { showKeysPanel(); return true; });
+        keyRecents = sysKey(R.drawable.ic_nav_recents, "Recent apps", v -> showRecents(), null);
+        for (View k : new View[]{keyBack, keyRecents}) {
+            k.setVisibility(drawerOpen ? View.VISIBLE : View.INVISIBLE);
+            dock.addView(k);
+        }
         dock.addView(dockGap());
         for (int i = 0; i < SLOTS; i++) {
             final int slot = i;
@@ -1712,19 +1743,21 @@ public class MainActivity extends Activity {
             }
             b.setOnClickListener(v -> {
                 if (pkg == null || (appsLoaded && !byPkg.containsKey(pkg))) pickDock(slot);
-                else launch(pkg);
+                else { if (drawerOpen) hideDrawer(); launch(pkg); }
             });
             b.setOnLongClickListener(v -> { pickDock(slot); return true; });
             dock.addView(b);
         }
         ImageButton all = dockButton();
-        all.setImageResource(R.drawable.ic_apps);
+        all.setImageResource(drawerOpen ? R.drawable.ic_close : R.drawable.ic_apps);
         all.setColorFilter(look.text2);
         all.setPadding(dp(19), dp(19), dp(19), dp(19));
-        all.setOnClickListener(v -> showDrawer());
+        all.setContentDescription("All apps");
+        all.setOnClickListener(v -> { if (drawerOpen) hideDrawer(); else showDrawer(); });
+        allBtn = all;
         dock.addView(all);
         dock.addView(dockGap());
-        dock.addView(sysKey(R.drawable.ic_moon, "Screensaver now", v -> showSaver(), null));
+        dock.addView(sysKey(R.drawable.ic_moon, "Screensaver now", v -> { if (drawerOpen) hideDrawer(); showSaver(); }, null));
         dock.addView(sysKey(R.drawable.ic_more, "Shortcuts: notifications, quick settings, screenshot…", v -> showKeysPanel(), null));
     }
 
@@ -1888,6 +1921,7 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this, dlg())
                 .setTitle("CarDash")
                 .setItems(labels.toArray(new String[0]), (d, w) -> acts.get(w).run())
+                .setNegativeButton("Close", null)
                 .show();
     }
 
@@ -2039,6 +2073,7 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this, dlg())
                 .setTitle("Badge on the back of the car  ·  shows in the \"behind the car\" view")
                 .setItems(labels.toArray(new String[0]), (d, w) -> acts.get(w).run())
+                .setNegativeButton("Close", null)
                 .show();
     }
 
@@ -2802,6 +2837,7 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this, dlg())
                 .setTitle("Rear camera (wired to the head unit)")
                 .setItems(labels.toArray(new String[0]), (d, w) -> acts.get(w).run())
+                .setNegativeButton("Close", null)
                 .show();
     }
 
@@ -2845,6 +2881,7 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this, dlg())
                 .setTitle("Dash cam  ·  DDPAI front + head unit rear")
                 .setItems(labels.toArray(new String[0]), (d, w) -> acts.get(w).run())
+                .setNegativeButton("Close", null)
                 .show();
     }
 
@@ -3136,6 +3173,7 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this, dlg())
                 .setTitle("RAM  ·  " + mb(m.availMem) + " free of " + mb(m.totalMem))
                 .setItems(labels.toArray(new String[0]), (d, w) -> acts.get(w).run())
+                .setNegativeButton("Close", null)
                 .show();
     }
 
@@ -3280,6 +3318,7 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this, dlg())
                 .setTitle("Music card")
                 .setItems(items, (d, w) -> { if (w == 0) forgetWidget(); else pickWidget(); })
+                .setNegativeButton("Close", null)
                 .show();
     }
 
@@ -3294,6 +3333,7 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this, dlg())
                 .setTitle("Music card  ·  " + musicCardLabel())
                 .setItems(labels.toArray(new String[0]), (d, w) -> acts.get(w).run())
+                .setNegativeButton("Close", null)
                 .show();
     }
 
@@ -3639,6 +3679,7 @@ public class MainActivity extends Activity {
                 "Show it now"};
         new AlertDialog.Builder(this, dlg())
                 .setTitle("Greeting  ·  Welcome after start-up, then good morning / afternoon / evening until you drive off")
+                .setNegativeButton("Close", null)
                 .setItems(items, (d, w) -> {
                     if (w == 0) editGreetName();
                     else if (w == 1) {
@@ -3917,6 +3958,7 @@ public class MainActivity extends Activity {
                 "All releases on GitHub"};
         new AlertDialog.Builder(this, dlg())
                 .setTitle("CarDash v" + updater.installedName() + "  ·  updates from GitHub")
+                .setNegativeButton("Close", null)
                 .setItems(items, (d, w) -> {
                     switch (w) {
                         case 0: checkUpdatesNow(); break;

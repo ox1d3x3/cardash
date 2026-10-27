@@ -212,7 +212,9 @@ updates itself, so there is nothing to copy over by USB after the first install.
 <details>
 <summary><b>Theme, sky and screensaver</b></summary>
 
-- **Auto day / night theme**: light 5 am – 6 pm, dark 6 pm – 5 am. An optional *real sunrise /
+- **Auto day / night theme**: light 5 am – 6 pm, dark 6 pm – 5 am. Both are tuned for head-unit LCDs,
+  which flatten contrast: the dark theme is true black with clearly lifted cards and bright text; the
+  light theme is grey with off-white cards (pure white blooms and washes out) and darker text. An optional *real sunrise /
   sunset* mode computes today's times offline from where GPS last saw the car. Or force always dark
   or always light. Switching swaps colours in place.
 - **Sky** (chase cam): blue sky, sun and drifting clouds by day; a crescent moon, twinkling stars,
@@ -260,9 +262,10 @@ updates itself, so there is nothing to copy over by USB after the first install.
   buttons.
 - **Dock**: 6 app slots plus an all-apps grid. Tap an empty slot to fill it, long-press any slot to
   change it. Defaults are detected automatically: maps, music player, phone / Bluetooth, settings.
-  - **Left: Back and Recent apps.** Back closes the app drawer, or takes you back to the app you
-    were last in. Recent apps opens Android's recent apps (with *CarDash buttons* on), or else
-    CarDash's own list of the apps you opened from it.
+  - **All apps**: the grid key opens every app; the dock **stays on screen** underneath it, and
+    **Back** and **Recent apps** appear on its left (the grid key turns into a close key). Back
+    takes you back to the dashboard; Recent apps opens Android's recent apps (with *CarDash
+    buttons* on), or else CarDash's own list of the apps you opened from it.
   - **Right: Screensaver now (moon) and Shortcuts (⋯).** Shortcuts opens a panel of big tiles:
     Notifications, Quick settings, Recent apps, Screenshot, Screensaver, Volume, Wi-Fi, Bluetooth,
     Screen off, Power menu, Android settings, CarDash settings.

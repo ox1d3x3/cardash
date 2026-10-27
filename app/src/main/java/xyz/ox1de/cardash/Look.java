@@ -19,20 +19,24 @@ final class Look {
 
     private Look(boolean l) {
         light = l;
+        // Tuned for cheap head-unit LCDs, which flatten contrast: true black behind clearly lifted cards
+        // and bright text at night; by day a grey background with off-white cards (pure white blooms and
+        // washes out), darker text and visible outlines.
         if (!l) {
-            bg = 0xFF07080A; card = 0xFF131519; cardHi = 0xFF1B1E23; line = 0xFF23262C;
-            text = 0xFFF2F3F5; text2 = 0xFF8B919A; text3 = 0xFF565B63;
-            dock = 0xFF0E0F12; slot = 0xFF16181C; ripple = 0x33FFFFFF; drawer = 0xF507080A;
+            bg = 0xFF000000; card = 0xFF181B21; cardHi = 0xFF23272E; line = 0xFF343A43;
+            text = 0xFFFFFFFF; text2 = 0xFFAAB1BB; text3 = 0xFF747B86;
+            dock = 0xFF0B0C0F; slot = 0xFF1E2127; ripple = 0x40FFFFFF; drawer = 0xF7000000;
             alert = 0xFFFF5A5F; carAuto = 0xFFF4F5F7;   // white car on dark
-            track = 0xFF30343B;                          // slider/progress rail: visible on a car screen in sunlight
+            track = 0xFF3D434C;                          // slider/progress rail: visible on a car screen in sunlight
+            accent = 0xFF4F82FF;                         // a brighter blue reads better on black
         } else {
-            bg = 0xFFE9ECEF; card = 0xFFFFFFFF; cardHi = 0xFFF1F3F5; line = 0xFFDCE0E5;
-            text = 0xFF15181D; text2 = 0xFF5D646E; text3 = 0xFF9298A1;
-            dock = 0xFFFFFFFF; slot = 0xFFF0F2F4; ripple = 0x1F000000; drawer = 0xF5E9ECEF;
-            alert = 0xFFE0353C; carAuto = 0xFF393D44;   // black car on light (charcoal so the glass stays readable)
-            track = 0xFFCDD2D9;
+            bg = 0xFFC9CFD7; card = 0xFFF4F6F8; cardHi = 0xFFE3E7EC; line = 0xFFAEB6C1;
+            text = 0xFF0A0C0F; text2 = 0xFF3A414B; text3 = 0xFF626A75;
+            dock = 0xFFE6E9ED; slot = 0xFFD5DAE1; ripple = 0x26000000; drawer = 0xF5C9CFD7;
+            alert = 0xFFD62C33; carAuto = 0xFF393D44;   // black car on light (charcoal so the glass stays readable)
+            track = 0xFFAEB6C1;
+            accent = 0xFF2C58D6;                         // a deeper blue holds its own on grey
         }
-        accent = 0xFF3E6AE1;
     }
 
     ColorStateList csl(int c) { return ColorStateList.valueOf(c); }
