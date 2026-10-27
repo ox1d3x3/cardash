@@ -91,14 +91,69 @@ final class CarArt {
         return luma(c) > 0.7f && Math.max(r, Math.max(g, b)) - Math.min(r, Math.min(g, b)) < 40;
     }
 
-    static Bitmap decode(Context ctx, int res, float targetW) {
+    /**
+     * A rear-art layer at exactly w x h pixels, scaled with care: halved (a clean 2x2 average) while
+     * it's more than twice too big, then one last small bilinear step. A single big bilinear jump
+     * skips pixels and looks soft / jaggy; this keeps the detail. Drawn 1:1 afterwards, so the GPU
+     * never resamples it again.
+     */
+    static Bitmap layer(Context ctx, int res, int w, int h) {
         android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
         o.inScaled = false;
         o.inPreferredConfig = Bitmap.Config.ARGB_8888;
-        // assets are 750 px wide: decode at half size when the car is drawn small (less memory, same look)
-        o.inSampleSize = targetW <= 360 ? 2 : 1;
-        return android.graphics.BitmapFactory.decodeResource(ctx.getResources(), res, o);
+        Bitmap src = android.graphics.BitmapFactory.decodeResource(ctx.getResources(), res, o);
+        return scaleHQ(src, w, h);
     }
+
+    static Bitmap scaleHQ(Bitmap src, int w, int h) {
+        Bitmap cur = src;
+        while (cur.getWidth() >= w * 2 && cur.getHeight() >= h * 2) {
+            Bitmap half = Bitmap.createScaledBitmap(cur, cur.getWidth() / 2, cur.getHeight() / 2, true);
+            if (cur != src) cur.recycle();
+            cur = half;
+        }
+        Bitmap out = cur.getWidth() == w && cur.getHeight() == h ? cur : Bitmap.createScaledBitmap(cur, w, h, true);
+        if (cur != out && cur != src) cur.recycle();
+        return out;
+    }
+
+    /**
+     * Gentle unsharp mask (3x3) for the photo-like rear art, so it stays crisp on soft head-unit
+     * panels. Only fully opaque areas are touched: the car's outline and shadow keep their smooth
+     * anti-aliased edges, no halos.
+     */
+    static void sharpen(Bitmap b, float amount) {
+        int w = b.getWidth(), h = b.getHeight();
+        if (w < 3 || h < 3) return;
+        int[] px = new int[w * h];
+        b.getPixels(px, 0, w, 0, 0, w, h);
+        int[] out = px.clone();
+        for (int y = 1; y < h - 1; y++) {
+            for (int x = 1; x < w - 1; x++) {
+                int i = y * w + x, c = px[i];
+                if ((c >>> 24) != 255) continue;
+                int sr = 0, sg = 0, sb = 0;
+                boolean solid = true;
+                for (int dy = -1; dy <= 1 && solid; dy++) {
+                    int row = i + dy * w;
+                    for (int dx = -1; dx <= 1; dx++) {
+                        int p = px[row + dx];
+                        if ((p >>> 24) != 255) { solid = false; break; }
+                        sr += (p >> 16) & 255; sg += (p >> 8) & 255; sb += p & 255;
+                    }
+                }
+                if (!solid) continue;
+                int r = (c >> 16) & 255, g = (c >> 8) & 255, bl = c & 255;
+                r = clamp8(r + amount * (r - sr / 9f));
+                g = clamp8(g + amount * (g - sg / 9f));
+                bl = clamp8(bl + amount * (bl - sb / 9f));
+                out[i] = 0xFF000000 | (r << 16) | (g << 8) | bl;
+            }
+        }
+        b.setPixels(out, 0, w, 0, 0, w, h);
+    }
+
+    static int clamp8(float v) { return v < 0 ? 0 : v > 255 ? 255 : Math.round(v); }
 
     /**
      * The owner's own badge on the boot lid: their chosen image (cut out, see Badges) or chrome
@@ -193,20 +248,25 @@ final class CarArt {
         c.drawOval(new RectF(14 * s, (R_GROUND - 10) * s, (RW - 10) * s, (R_GROUND + 5) * s), sh);
 
         Paint fp = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
-        RectF dst = new RectF(0, 0, cw, ch);
-        Bitmap base = decode(ctx, sp.base, cw);
-        c.drawBitmap(base, null, dst, fp);
+        // the art, pixel-exact: each layer scaled once to the final size and drawn 1:1
+        Bitmap art = Bitmap.createBitmap(cw, ch, Bitmap.Config.ARGB_8888);
+        Canvas ac = new Canvas(art);
+        Bitmap base = layer(ctx, sp.base, cw, ch);
+        ac.drawBitmap(base, 0, 0, fp);
         base.recycle();
         if (sp.paint != 0 && !neutralLight(color)) {
-            Bitmap paint = decode(ctx, sp.paint, cw);
+            Bitmap paint = layer(ctx, sp.paint, cw, ch);
             Paint tp = new Paint(fp);
             tp.setColorFilter(new android.graphics.PorterDuffColorFilter(color | 0xFF000000, PorterDuff.Mode.MULTIPLY));
-            c.drawBitmap(paint, null, dst, tp);
+            ac.drawBitmap(paint, 0, 0, tp);
             paint.recycle();
         }
-        Bitmap gloss = decode(ctx, sp.gloss, cw);             // clearcoat: over the paint, never tinted
-        c.drawBitmap(gloss, null, dst, fp);
+        Bitmap gloss = layer(ctx, sp.gloss, cw, ch);          // clearcoat: over the paint, never tinted
+        ac.drawBitmap(gloss, 0, 0, fp);
         gloss.recycle();
+        sharpen(art, 0.45f);
+        c.drawBitmap(art, 0, 0, null);
+        art.recycle();
         drawBadge(c, sp, s, badge);
         if (plate != null && !plate.trim().isEmpty()) drawPlate(c, sp.plate, s, plate.trim());
         b.prepareToDraw();
@@ -216,11 +276,11 @@ final class CarArt {
         r.body = b;
         r.rear = sp;
         // lamps-on band: same horizontal layout as the body, rows bandY0..bandY1 only
-        Bitmap lit = decode(ctx, sp.lit, cw);
+        Bitmap lit = layer(ctx, sp.lit, cw, ch);
         Bitmap band = Bitmap.createBitmap(cw + pad * 2, Math.max(1, Math.round((sp.bandY1 - sp.bandY0) * s)), Bitmap.Config.ARGB_8888);
         Canvas bc = new Canvas(band);
-        bc.translate(pad, -sp.bandY0 * s);
-        bc.drawBitmap(lit, null, dst, fp);
+        bc.translate(pad, -Math.round(sp.bandY0 * s));         // whole pixels: lines up exactly with the body
+        bc.drawBitmap(lit, 0, 0, fp);
         lit.recycle();
         band.prepareToDraw();
         r.tail = band;
@@ -265,7 +325,7 @@ final class CarArt {
         int cw = Math.max(1, Math.round(vw * s)), ch = Math.max(1, Math.round(vh * s));
         Bitmap b = Bitmap.createBitmap(cw + pad * 2, Math.max(1, Math.round((y1 - y0) * s)), Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(b);
-        c.translate(pad, -y0 * s);
+        c.translate(pad, -Math.round(y0 * s));                 // whole pixels: lines up exactly with the body
         layer(ctx, c, res, 0, cw, ch);
         b.prepareToDraw();
         return b;

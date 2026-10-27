@@ -3,6 +3,25 @@
 All notable changes to CarDash. Versions follow `MAJOR.MINOR[.PATCH]`; pre-releases are tagged
 `vX.Y-betaN`. Each `## vX.Y` section below becomes the notes of the matching GitHub release.
 
+## v3.2.1 — 2026-10-28
+
+(First published as v3.2, which by mistake contained the v3.1 build; v3.2.1 is the real one.)
+
+### Added
+- **Diagnostic logs** (*Settings → Diagnostic logs*, off by default) into a `cardash` folder on
+  internal storage: device / display / settings snapshot, a timestamped event log (lifecycle,
+  screensaver, theme, GPS, media, updates, RAM optimiser, dash cam, errors and crashes with stack
+  traces), a performance line every 30 s (frames, slow / janky frames, frame-time percentiles, CPU,
+  memory, threads, temperature) and Android's own log for CarDash (whole system log with root).
+  *Mark the problem now* drops a marker at the exact moment. Rotating files, newest 12 kept.
+
+### Changed
+- **Crisper picture.** The car pictures (chase cam, top-down, screensaver) are drawn at whole-pixel
+  positions, so the GPU no longer resamples them into a soft image; their lit-lamp layers line up to
+  the pixel. The rear car art is decoded at full resolution, scaled down in clean halving steps and
+  gently sharpened. Album art is prepared at exactly the size it's shown, and dock icons are drawn
+  1:1 instead of being shrunk by a couple of pixels.
+
 ## v3.1 — 2026-10-27
 
 ### Changed

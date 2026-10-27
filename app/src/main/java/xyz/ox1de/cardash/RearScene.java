@@ -466,7 +466,8 @@ final class RearScene {
 
         // car: rises in at start-up; the rear lifts a touch when the brakes bite
         float dy = (1f - appear) * 46f * s - pop * 2.6f * s;
-        float x = carL - pad, y = carT - pad + dy;
+        // whole pixels: a bitmap placed between pixels gets resampled and looks soft
+        float x = Math.round(carL) - pad, y = Math.round(carT) - pad + dy;
         if (oldCar != null && swapT < 1f) {
             bmp.setAlpha((int) (255 * appear * (1f - swapT * swapT)));
             c.drawBitmap(oldCar, x, y, bmp);
@@ -479,7 +480,7 @@ final class RearScene {
 
         if (lamp > 0.01f && tail != null) {
             bmp.setAlpha((int) (Math.min(1f, lamp) * 255 * litK));
-            c.drawBitmap(tail, x, carT + sp.bandY0 * s + dy, bmp);
+            c.drawBitmap(tail, x, Math.round(carT) + Math.round(sp.bandY0 * s) + dy, bmp);
         }
         bmp.setAlpha(255);
         if (halo > 0.01f) {

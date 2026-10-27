@@ -255,7 +255,7 @@ public class ClockView extends View {
         CarArt.EX.execute(() -> {
             if (g != gen) return;
             final CarArt.Set set = CarArt.renderSet(ctx, st, col, sc, pd, false, false, true);
-            final float ty = CarArt.spec(st).tailY0 * sc;
+            final float ty = Math.round(CarArt.spec(st).tailY0 * sc);
             post(() -> {
                 if (g != gen) return;
                 car = set.body;
@@ -435,7 +435,7 @@ public class ClockView extends View {
         float roll = easeOut(t / (float) ROLL_MS);
         float yOff = (1f - roll) * (h * 0.62f);
         bmp.setAlpha((int) (255 * Math.min(1f, 0.15f + roll * 1.2f)));
-        cv.drawBitmap(car, carL - pad, carT - pad + yOff, bmp);
+        cv.drawBitmap(car, Math.round(carL) - pad, Math.round(carT) - pad + yOff, bmp);   // whole pixels: sharp
 
         // brake as it comes to rest, then two indicator flashes as it locks
         float brake = 0f;
@@ -451,7 +451,7 @@ public class ClockView extends View {
         if (brake > 0.01f) {
             if (tailLit != null) {
                 bmp.setAlpha((int) (255 * brake));
-                cv.drawBitmap(tailLit, carL - pad, carT + litTailY + yOff, bmp);
+                cv.drawBitmap(tailLit, Math.round(carL) - pad, Math.round(carT) + litTailY + yOff, bmp);
                 bmp.setAlpha(255);
             }
             red.setAlpha((int) (255 * brake));

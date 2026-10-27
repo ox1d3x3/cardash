@@ -347,6 +347,7 @@ final class DashCam {
     }
 
     void log(String s) {
+        Diag.log("cam", s);
         synchronized (log) {
             long ms = SystemClock.elapsedRealtime() - t0;
             log.append(String.format(Locale.US, "%3d.%03d  ", ms / 1000, ms % 1000)).append(s).append('\n');

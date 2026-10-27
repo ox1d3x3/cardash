@@ -37,6 +37,7 @@ no third-party libraries, an APK under 0.5 MB, and zero frames drawn when nothin
 - [Building from source](#building-from-source)
 - [Releasing](#releasing)
 - [Project structure](#project-structure)
+- [Diagnostic logs](#diagnostic-logs)
 - [Troubleshooting](#troubleshooting)
 - [Limitations](#limitations)
 - [Acknowledgements and disclaimer](#acknowledgements-and-disclaimer)
@@ -415,6 +416,12 @@ CarDash is built to cost nothing when nothing changes.
 - **Quiet in the background.** GPS, media callbacks and timers stop in `onPause`. The clock uses the
   system `TIME_TICK` broadcast. App icons are rendered once at their exact size, dock first, and
   package changes refresh only the affected app.
+- **Pixel-exact, crisp drawing.** Everything renders at the panel's native resolution and at the
+  exact size it's shown: the car pictures, sky, album art and app icons are made at their final
+  pixel size and drawn 1:1 at whole-pixel positions, so the GPU never resamples them (a bitmap
+  placed between pixels comes out soft). The rear car art is scaled down in clean halving steps and
+  gently sharpened for soft head-unit panels. (Dynamic resolution, as in games, would lower the
+  resolution under load; CarDash doesn't need it and would only look softer for it.)
 - **Small.** No AndroidX, no Kotlin runtime, no web views, no third-party libraries. R8 shrinks the
   release build to under 0.5 MB.
 
@@ -513,6 +520,28 @@ tools/
 ├── ci.yml                build every push and pull request
 └── release.yml           build, sign and publish an APK for every tag
 ```
+
+## Diagnostic logs
+
+Something not right? *Settings → Diagnostic logs → Logging* (off by default) records what CarDash
+is doing so you can send it in with your report. Reproduce the problem, tap **Mark the problem now**
+the moment it happens, then switch logging off again and send the newest files.
+
+- **Where**: a `cardash` folder on internal storage (`/storage/emulated/0/cardash`). Android 11+
+  only lets an app create its own top-level folder with *All files access*, which CarDash asks for
+  when you switch logging on (it only ever writes its own log files). Without it the logs go to
+  `Documents/cardash` (or CarDash's own storage folder); the settings screen shows the exact path.
+- **`cardash-<date>.txt`**: device, Android version, display (resolution, dpi, refresh rate), RAM and
+  all CarDash settings, then a timestamped line for everything CarDash does (start-up time,
+  lifecycle, screensaver, all-apps, theme, GPS every 10 s, media player and play state, updates,
+  RAM optimiser passes, dash cam connection steps, errors and crashes with stack traces), and every
+  30 s a performance line: frames drawn, slow (> 16 ms) and janky (> 33 ms) frames, frame-time p50 /
+  p90 / p99 / max, CPU %, memory (PSS, Java and native heap, free system RAM), threads and the
+  hottest temperature sensor the unit exposes.
+- **`logcat-<date>.txt`**: Android's own log for CarDash; with root and Deep mode on, the whole
+  system log.
+- Files rotate at 4 MB (logcat 8 MB) and only the newest 12 are kept; *Delete all logs* clears them.
+  With logging off, none of it runs: no thread, no frame listener, no files.
 
 ## Troubleshooting
 

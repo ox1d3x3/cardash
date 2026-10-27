@@ -186,6 +186,9 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
+        if (getSharedPreferences("cardash", MODE_PRIVATE).getBoolean("diagOn", false))
+            Diag.start(this, getSharedPreferences("cardash", MODE_PRIVATE), getSharedPreferences("cardash", MODE_PRIVATE).getBoolean("boostRoot", false));
+        long t0 = SystemClock.uptimeMillis();
         setContentView(R.layout.activity_main);
 
         sp = getSharedPreferences("cardash", MODE_PRIVATE);
@@ -342,12 +345,16 @@ public class MainActivity extends Activity {
             requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION,
                     Manifest.permission.ACCESS_COARSE_LOCATION}, 1);
         }
+        Diag.log("life", "onCreate (" + (b == null ? "cold start" : "recreated") + ") in " + (SystemClock.uptimeMillis() - t0) + " ms");
+        Diag.watchFrames(getWindow());
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         resumed = true;
+        Diag.log("life", "onResume");
+        if (diagPending) { diagPending = false; setDiag(true); }
         updateClock();
         syncVolume();
         startLocation();
@@ -386,6 +393,7 @@ public class MainActivity extends Activity {
     protected void onPause() {
         super.onPause();
         resumed = false;
+        Diag.log("life", "onPause (another app or the screen took over)");
         drive.setActive(false);
         hideSaver();
         closeCam(); // leaving home: give the Wi-Fi back
@@ -448,6 +456,7 @@ public class MainActivity extends Activity {
     @Override
     public void onTrimMemory(int level) {
         super.onTrimMemory(level);
+        Diag.log("mem", "onTrimMemory level " + level);
         if (level >= TRIM_MEMORY_UI_HIDDEN && !resumed) {
             artBmp = null;
             artSig = 0;
@@ -457,6 +466,10 @@ public class MainActivity extends Activity {
 
     @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] res) {
+        if (code == REQ_STORAGE) {         // storage, for diagnostic logs in Internal storage/cardash
+            if (diagPending) { diagPending = false; if (Diag.on != null) Diag.stop(); setDiag(true); }
+            return;
+        }
         if (code == 2) { // camera, for the rear view
             boolean ok = res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED;
             if (ok) startRear(); else if (camOpen && camRearOn) setCamStatus("Camera access was refused, so the rear view can't be shown.");
@@ -755,7 +768,15 @@ public class MainActivity extends Activity {
         locating = false;
     }
 
+    long diagFixAt;
+
     void onFix(Location l) {
+        long nowFix = SystemClock.elapsedRealtime();
+        if (Diag.on != null && nowFix - diagFixAt > 10_000) {   // GPS: one line every 10 s at most
+            diagFixAt = nowFix;
+            Diag.log("gps", String.format(Locale.US, "fix %.1f km/h, ±%.0f m, %s", l.hasSpeed() ? l.getSpeed() * 3.6f : -1f,
+                    l.hasAccuracy() ? l.getAccuracy() : -1f, l.getProvider()));
+        }
         lastFix = SystemClock.elapsedRealtime();
         float s = l.hasSpeed() ? l.getSpeed() : 0f;
         if (s < 0.6f) s = 0f; // kill standstill jitter
@@ -920,6 +941,8 @@ public class MainActivity extends Activity {
     }
 
     void setController(MediaController c) {
+        if ((c == null) != (ctl == null) || (c != null && !c.getPackageName().equals(ctl.getPackageName())))
+            Diag.log("media", "controller: " + (c == null ? "none" : c.getPackageName()));
         if (ctl != null) ctl.unregisterCallback(mcb);
         ctl = c;
         if (c != null) {
@@ -986,7 +1009,7 @@ public class MainActivity extends Activity {
             if (artBmp != null || artSig != -1) { artSig = -1; setArt(null); }
             return;
         }
-        final int target = Math.max(dp(140), artIv.getHeight());
+        final int target = Math.max(dp(140), Math.max(artIv.getWidth(), artIv.getHeight())); // the size it's shown at: no GPU rescale
         artEx.execute(() -> {
             Bitmap small;
             long sig;
@@ -996,7 +1019,7 @@ public class MainActivity extends Activity {
                 if (Build.VERSION.SDK_INT >= 26 && src.getConfig() == Bitmap.Config.HARDWARE) src = src.copy(Bitmap.Config.ARGB_8888, false);
                 sig = artSignature(src);
                 int w = src.getWidth(), h = src.getHeight(), m = Math.max(w, h);
-                small = m > target * 1.2f ? Bitmap.createScaledBitmap(src, Math.max(1, w * target / m), Math.max(1, h * target / m), true) : src;
+                small = m > target ? CarArt.scaleHQ(src, Math.max(1, w * target / m), Math.max(1, h * target / m)) : src;
                 tint = artColor(small);
             } catch (Throwable t) {
                 small = b;
@@ -1100,6 +1123,7 @@ public class MainActivity extends Activity {
         boolean p = ctl != null && isPlaying(ctl);
         if (saver != null) saver.setMedia(ctl != null && !needAccess, p);
         if (widgetView != null) { ui.removeCallbacks(ticker); return; }
+        if (p != lastPlaying) Diag.log("media", p ? "playing" : "paused / stopped");
         if (p != lastPlaying || !iconsInit) {
             boolean change = iconsInit && p != lastPlaying;
             lastPlaying = p;
@@ -1587,6 +1611,7 @@ public class MainActivity extends Activity {
     boolean drawerOpen;
 
     void showDrawer() {
+        Diag.log("ui", "all apps open");
         if (!appsLoaded) loadApps(null);
         // the drawer stops above the dock: the dock (Back, Recent apps, close) stays on screen
         FrameLayout.LayoutParams dl = (FrameLayout.LayoutParams) drawer.getLayoutParams();
@@ -1785,8 +1810,9 @@ public class MainActivity extends Activity {
         ImageButton b = new ImageButton(this);
         b.setBackground(look.slot(dp(16)));
         b.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        b.setPadding(dp(8), dp(8), dp(8), dp(8));
-        int sz = dockBtn > 0 ? dockBtn : dp(66);
+        // app icons are rendered at exactly iconPx: pad so they're drawn 1:1 (no blurry rescale)
+        int sz = dockBtn > 0 ? dockBtn : dp(66), p = Math.max(dp(4), (sz - iconPx) / 2);
+        b.setPadding(p, p, p, p);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(sz, sz);
         lp.leftMargin = lp.rightMargin = dp(7);
         b.setLayoutParams(lp);
@@ -1917,6 +1943,8 @@ public class MainActivity extends Activity {
             buildDock();
         });
         labels.add("Android settings");                                          acts.add(() -> startSafe(new Intent(Settings.ACTION_SETTINGS)));
+        final boolean diag = sp.getBoolean("diagOn", false);
+        labels.add("Diagnostic logs:  " + (diag ? "ON  ·  recording" : "off"));      acts.add(this::showDiag);
         labels.add("About CarDash  ·  v" + updater.installedName());              acts.add(this::showAbout);
         new AlertDialog.Builder(this, dlg())
                 .setTitle("CarDash")
@@ -2206,6 +2234,7 @@ public class MainActivity extends Activity {
     }
 
     void applyTheme(Look L) {
+        Diag.log("ui", "theme " + (L.light ? "light" : "dark"));
         look = L;
         Window w = getWindow();
         w.setBackgroundDrawable(new ColorDrawable(L.bg)); // the only full-screen fill (root has none)
@@ -3001,6 +3030,7 @@ public class MainActivity extends Activity {
     }
 
     void showSaver() {
+        Diag.log("ui", "screensaver on");
         if (saverOn || saver == null) return;
         saverOn = true;
         saverAt = SystemClock.elapsedRealtime();
@@ -3020,6 +3050,7 @@ public class MainActivity extends Activity {
     }
 
     void hideSaver() {
+        if (saverOn) Diag.log("ui", "screensaver off");
         if (!saverOn) return;
         saverOn = false;
         saver.animate().cancel();
@@ -3104,6 +3135,8 @@ public class MainActivity extends Activity {
 
     class BoostL implements Booster.Listener {
         @Override public void onCleaned(Booster.Result r) {
+            Diag.log("ram", (r.manual ? "manual" : "auto") + " clean: freed " + mb(r.freed) + ", stopped " + r.stopped
+                    + ", available " + mb(r.avail) + " of " + mb(r.total));
             updateRam();
             if (!r.manual) return; // automatic passes are silent
             String used = "RAM " + Math.round(100f * (r.total - r.avail) / r.total) + "% used";
@@ -3756,6 +3789,9 @@ public class MainActivity extends Activity {
     }
 
     void onUpdateState() {
+        Diag.log("update", updater.state + (updater.release != null ? " " + updater.release.tag : "")
+                + (updater.state == Updater.State.FAILED ? " · " + updater.error : "")
+                + (updater.state == Updater.State.DOWNLOADING ? " " + updater.progress + "%" : ""));
         Updater.Release r = updater.release;
         String chip = null;
         switch (updater.state) {
@@ -3986,6 +4022,89 @@ public class MainActivity extends Activity {
                 })
                 .show();
     }
+
+    // ------------------------------------------------------------------ diagnostic logs (off by default)
+
+    boolean diagPending;   // waiting for the owner to come back from the "All files access" screen
+    static final int REQ_STORAGE = 44;
+
+    void showDiag() {
+        final boolean onNow = sp.getBoolean("diagOn", false);
+        final java.io.File dir = Diag.currentDir(this);
+        java.util.List<String> labels = new ArrayList<>();
+        java.util.List<Runnable> acts = new ArrayList<>();
+        labels.add("Logging:  " + (onNow ? "ON  (tap to stop)" : "off  (tap to start recording)"));
+        acts.add(() -> setDiag(!onNow));
+        if (onNow) {
+            labels.add("Mark the problem now  (do this right when it happens)");
+            acts.add(() -> {
+                Diag.log("USER", "=================== PROBLEM MARKED HERE ===================");
+                toast("Marked in the log");
+            });
+        }
+        labels.add("Saved in:  " + dir.getAbsolutePath());
+        acts.add(() -> toast(dir.getAbsolutePath()));
+        if (!Diag.topLevelAllowed(this)) {
+            labels.add("Save in Internal storage/cardash  (allow file access)");
+            acts.add(() -> askStorage(onNow));
+        }
+        labels.add("Delete all logs");
+        acts.add(() -> {
+            java.io.File[] fs = dir.listFiles((d, n) -> n.endsWith(".txt"));
+            int n = 0;
+            if (fs != null) for (java.io.File f : fs) if ((Diag.on == null || !f.equals(Diag.on.file)) && f.delete()) n++;
+            toast("Deleted " + n + " log file" + (n == 1 ? "" : "s"));
+        });
+        new AlertDialog.Builder(this, dlg())
+                .setTitle("Diagnostic logs  ·  for reporting a problem")
+                .setItems(labels.toArray(new String[0]), (d, w) -> acts.get(w).run())
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    void setDiag(boolean on) {
+        if (on && !Diag.topLevelAllowed(this) && !sp.getBoolean("diagAsked", false)) {
+            sp.edit().putBoolean("diagAsked", true).apply();
+            new AlertDialog.Builder(this, dlg())
+                    .setTitle("Where to save the logs")
+                    .setMessage("CarDash can save its logs in a \"cardash\" folder on internal storage. Android only lets an "
+                            + "app create its own folder there with \"All files access\" (CarDash only ever writes its own log "
+                            + "files). Without it the logs go to:\n\n" + Diag.pickDir(this).getAbsolutePath())
+                    .setPositiveButton("Allow, use Internal storage/cardash", (d, w) -> askStorage(true))
+                    .setNegativeButton("Use that folder", (d, w) -> setDiag(true))
+                    .show();
+            return;
+        }
+        sp.edit().putBoolean("diagOn", on).apply();
+        if (on) {
+            Diag.start(this, sp, rootUpdates());
+            Diag.watchFrames(getWindow());
+            Diag.log("diag", "logging switched on by the owner");
+            toast("Recording logs to " + Diag.currentDir(this).getAbsolutePath());
+        } else {
+            Diag.stop();
+            toast("Logging off");
+        }
+    }
+
+    /** "All files access" (Android 11+) or the storage permission (older), then switch logging on. */
+    void askStorage(boolean thenStart) {
+        diagPending = thenStart;
+        if (Build.VERSION.SDK_INT >= 30) {
+            Intent i = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:" + getPackageName()));
+            if (!tryStart(i) && !tryStart(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))) {
+                diagPending = false;
+                toast("This unit hides that setting: logs go to " + Diag.pickDir(this).getAbsolutePath());
+                if (thenStart && Diag.on == null) setDiag(true);
+                return;
+            }
+            // logging restarts when we come back (onResume), in the new folder if access was granted
+            if (Diag.on != null) Diag.stop();
+        } else {
+            requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQ_STORAGE);
+        }
+    }
+
 
     // ------------------------------------------------------------------ about
 

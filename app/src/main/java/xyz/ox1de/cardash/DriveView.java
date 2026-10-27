@@ -290,8 +290,8 @@ public class DriveView extends View {
                 car = set.body;
                 headLit = set.head;
                 tailLit = set.tail;
-                litHeadY = CarArt.HEAD_Y0 * sc;
-                litTailY = (v == REAR ? 0 : CarArt.spec(st).tailY0) * sc;
+                litHeadY = Math.round(CarArt.HEAD_Y0 * sc);
+                litTailY = Math.round((v == REAR ? 0 : CarArt.spec(st).tailY0) * sc);
                 if (set.rear != null) rspec = set.rear;
                 pad = pd;
                 swapT = first ? 1f : 0f;
@@ -424,19 +424,21 @@ public class DriveView extends View {
         boolean fading = oldCar != null && swapT < 1f && oldView == TOP;
         if (fading) {
             bmpPaint.setAlpha((int) (255 * appear * (1f - swapT * swapT)));
-            c.drawBitmap(oldCar, oldL - oldPad, oldT - oldPad, bmpPaint);
+            c.drawBitmap(oldCar, Math.round(oldL) - oldPad, Math.round(oldT) - oldPad, bmpPaint);
             bmpPaint.setAlpha((int) (255 * appear * swapT));
         } else {
             bmpPaint.setAlpha((int) (255 * appear));
         }
-        if (car != null) c.drawBitmap(car, drawnL - pad, drawnT - pad, bmpPaint);
+        // whole pixels: drawn 1:1 the car stays razor sharp (a fractional position resamples it)
+        float bx = Math.round(drawnL) - pad, by = Math.round(drawnT);
+        if (car != null) c.drawBitmap(car, bx, by - pad, bmpPaint);
 
         // lamps: the lit lamp shapes fade in over the car, plus a soft bloom around them
         float litK = fading ? appear * swapT : appear; // lamps belong to the new car
         if (lens > 0.01f) {
             if (headLit != null) {
                 bmpPaint.setAlpha((int) (Math.min(1f, lens) * 255 * litK));
-                c.drawBitmap(headLit, drawnL - pad, drawnT + litHeadY, bmpPaint);
+                c.drawBitmap(headLit, bx, by + litHeadY, bmpPaint);
             }
             lensGlow.setAlpha((int) (Math.min(1f, lens * 0.6f) * 255 * appear));
             float r = 0.85f + 0.2f * Math.min(1.25f, lens);
@@ -445,7 +447,7 @@ public class DriveView extends View {
         }
         if (lamp > 0.01f && tailLit != null) {
             bmpPaint.setAlpha((int) (lamp * 255 * litK));
-            c.drawBitmap(tailLit, drawnL - pad, drawnT + litTailY, bmpPaint);
+            c.drawBitmap(tailLit, bx, by + litTailY, bmpPaint);
         }
         bmpPaint.setAlpha(255);
         if (halo > 0.01f) {
