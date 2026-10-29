@@ -261,6 +261,11 @@ final class Diag {
     // ------------------------------------------------------------------ Android's log
 
     void startLogcat(boolean full) {
+        if (full && !startLogcatCmd(true)) startLogcatCmd(false);   // no root after all: CarDash's own log
+        else if (!full) startLogcatCmd(false);
+    }
+
+    boolean startLogcatCmd(boolean full) {
         try {
             String[] cmd = full ? new String[]{"su", "-c", "logcat -v threadtime"}
                     : new String[]{"logcat", "-v", "threadtime", "--pid=" + Process.myPid()};
@@ -296,8 +301,10 @@ final class Diag {
             t.setDaemon(true);
             t.start();
             log("diag", "logcat capture started (" + (full ? "whole system, root" : "CarDash's own log") + ")");
+            return true;
         } catch (Exception e) {
-            log("diag", "logcat capture unavailable: " + e.getMessage());
+            log("diag", "logcat capture unavailable" + (full ? " with root" : "") + ": " + e.getMessage());
+            return false;
         }
     }
 

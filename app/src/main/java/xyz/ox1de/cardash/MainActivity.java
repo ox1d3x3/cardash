@@ -269,7 +269,7 @@ public class MainActivity extends Activity {
         }
         ramTv.setOnClickListener(v -> manualClean());
         ramTv.setOnLongClickListener(v -> { showOptimizer(); return true; });
-        clockTv.setOnLongClickListener(v -> { showSaver(); return true; });
+        clockTv.setOnLongClickListener(v -> { showSaver(true); return true; });
         ui.postDelayed(bootClean, 30_000); // after boot, once the head unit's own services have started
         maybeResumeMusic();
         speedTv.setFontFeatureSettings("tnum"); // fixed-width digits: no jitter as speed changes
@@ -291,9 +291,11 @@ public class MainActivity extends Activity {
         Anim.press(speedBox, 0.95f);
         if (b == null) { // cold start: the dashboard rises in, card by card
             float d = dp(26);
-            Anim.rise(drivePanel, d, 0);
-            Anim.rise(rightCol, d, 80);
-            Anim.rise(dock, d, 160);
+            // the first frames after start-up are the heaviest (layout, first textures): let them pass
+            // before anything moves, so the rise itself runs smooth on a slow unit
+            Anim.rise(drivePanel, d, 140);
+            Anim.rise(rightCol, d, 220);
+            Anim.rise(dock, d, 300);
         }
 
         gridAdapter = new AppAdapter();
@@ -360,7 +362,7 @@ public class MainActivity extends Activity {
         startLocation();
         connectMedia();
         applyImmersive();
-        drive.setActive(!saverOn);
+        syncDriveActive();
         updateCamSession(); // Dash cam layout: bring the tile back
         if (dashLayout()) ui.postDelayed(linkCheck, 5000);
         updateRam();
@@ -413,6 +415,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        Diag.unwatchFrames();
         if (receiversOn) {
             try { unregisterReceiver(timeRx); } catch (Exception ignored) { }
             try { unregisterReceiver(volRx); } catch (Exception ignored) { }
@@ -781,6 +784,7 @@ public class MainActivity extends Activity {
         float s = l.hasSpeed() ? l.getSpeed() : 0f;
         if (s < 0.6f) s = 0f; // kill standstill jitter
         renderSpeed(s);
+        saverSpeedCheck(s);
         if (greetShown) { // the car moved off: the speed takes the greeting's place (two fixes, so GPS jitter can't do it)
             if (s >= 2f) { if (++greetMoving >= 2 || s >= 4f) hideGreeting(true); }
             else greetMoving = 0;
@@ -1384,8 +1388,14 @@ public class MainActivity extends Activity {
         return b;
     }
 
+    /** The road scene animates only while it can actually be seen. */
+    void syncDriveActive() {
+        drive.setActive(resumed && !saverOn && !drawerOpen && !camOpen);
+    }
+
     boolean installed(String pkg) {
         if (byPkg.containsKey(pkg)) return true;
+        if (appsLoaded && !appsLoading && !appsDirty) return false;   // every launchable app is in byPkg: no package-manager call
         try { pm.getPackageInfo(pkg, 0); return true; } catch (Exception e) { return false; }
     }
 
@@ -1504,7 +1514,7 @@ public class MainActivity extends Activity {
                     if (!KeysService.enabled(this)) { showKeysSetup(); return; }
                     ui.postDelayed(() -> KeysService.press(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_TAKE_SCREENSHOT), 450);
                 }},
-                {R.drawable.ic_moon, "Screensaver", (Runnable) this::showSaver},
+                {R.drawable.ic_moon, "Screensaver", (Runnable) () -> showSaver(true)},
                 {R.drawable.ic_volume, "Volume", (Runnable) () -> am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_SAME, AudioManager.FLAG_SHOW_UI)},
                 {R.drawable.ic_wifi, "Wi-Fi", (Runnable) () -> {
                     if (Build.VERSION.SDK_INT < 29 || !tryStart(new Intent(Settings.Panel.ACTION_WIFI))) startSafe(new Intent(Settings.ACTION_WIFI_SETTINGS));
@@ -1626,7 +1636,8 @@ public class MainActivity extends Activity {
         drawer.setVisibility(View.VISIBLE);
         drive.setActive(false); // hidden behind the drawer: don't animate it
         // settles in from slightly zoomed: one GPU layer, composited, nothing re-drawn per frame
-        drawer.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(200)
+        // a short delay: the grid lays itself out (the heavy frame) before the fade starts
+        drawer.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(24).setDuration(200)
                 .setInterpolator(Anim.OUT).withLayer().start();
     }
 
@@ -1635,7 +1646,7 @@ public class MainActivity extends Activity {
         drawerOpen = false;
         dockForDrawer(false);
         drawer.animate().cancel();
-        drive.setActive(resumed && !saverOn);
+        syncDriveActive();
         if (resumed) {
             drawer.animate().alpha(0f).scaleX(1.03f).scaleY(1.03f).setStartDelay(0).setDuration(140)
                     .setInterpolator(Anim.OUT).withLayer()
@@ -1782,7 +1793,7 @@ public class MainActivity extends Activity {
         allBtn = all;
         dock.addView(all);
         dock.addView(dockGap());
-        dock.addView(sysKey(R.drawable.ic_moon, "Screensaver now", v -> { if (drawerOpen) hideDrawer(); showSaver(); }, null));
+        dock.addView(sysKey(R.drawable.ic_moon, "Screensaver now", v -> { if (drawerOpen) hideDrawer(); showSaver(true); }, null));
         dock.addView(sysKey(R.drawable.ic_more, "Shortcuts: notifications, quick settings, screenshot…", v -> showKeysPanel(), null));
     }
 
@@ -1916,6 +1927,9 @@ public class MainActivity extends Activity {
         final boolean saverCar = sp.getBoolean("saverCar", true);
         labels.add("Parked car on screensaver:  " + (saverCar ? "on" : "off"));
         acts.add(() -> { sp.edit().putBoolean("saverCar", !saverCar).apply(); applyCar(); toast("Parked car on screensaver: " + (!saverCar ? "on" : "off")); });
+        final boolean moveOff = sp.getBoolean("saverMoveOff", true);
+        labels.add("Screensaver started by hand closes when you drive off:  " + (moveOff ? "yes" : "no"));
+        acts.add(() -> { sp.edit().putBoolean("saverMoveOff", !moveOff).apply(); toast("Manual screensaver closes when driving: " + (!moveOff ? "yes" : "no")); });
         final boolean saverCat = sp.getBoolean("saverCat", true);
         labels.add("Sleepy cat on the parked car:  " + (saverCat ? "on" : "off"));
         acts.add(() -> { sp.edit().putBoolean("saverCat", !saverCat).apply(); applyCar(); toast("Sleepy cat: " + (!saverCat ? "on" : "off")); });
@@ -2358,7 +2372,15 @@ public class MainActivity extends Activity {
 
     final BroadcastReceiver wakeRx = new WakeRx();
     class WakeRx extends BroadcastReceiver {
-        @Override public void onReceive(Context c, Intent i) { lastWake = SystemClock.elapsedRealtime(); } // ignition on (sleep-mode units)
+        @Override public void onReceive(Context c, Intent i) {   // ignition on (sleep-mode units)
+            lastWake = SystemClock.elapsedRealtime();
+            // the unit kept CarDash on screen through its sleep: a new drive starts, so the dashboard
+            // comes back instead of the screensaver it went to sleep with
+            if (saverOn && saverMayAutoClose()) {
+                Diag.log("ui", "screensaver closed: the head unit woke up");
+                hideSaver();
+            }
+        }
     }
 
     int rearMode() { return sp.getInt("rearMode", 1); } // 0 off, 1 head unit camera, 2 an app
@@ -2562,7 +2584,7 @@ public class MainActivity extends Activity {
         ui.removeCallbacks(hideCamBar);
         stopRear();
         mainView.setVisibility(View.VISIBLE);
-        drive.setActive(resumed && !saverOn);
+        syncDriveActive();
         if (resumed && dashLayout() && cam != null && !tileReady) {
             closingToTile = true;           // keep showing video full screen until the tile surface exists
             ui.postDelayed(finishCloseR, 800);
@@ -2957,7 +2979,7 @@ public class MainActivity extends Activity {
                 ui.postDelayed(this, 30_000);
                 return;
             }
-            showSaver();
+            showSaver(false);
         }
     }
 
@@ -3029,9 +3051,36 @@ public class MainActivity extends Activity {
         return "\u266A  " + t + (a == null ? "" : "  \u00B7  " + a);
     }
 
+    boolean saverManual;   // started by hand (moon key, long-press, Start now) rather than by the idle timer
+    int saverMoveFixes;
+
+    /**
+     * Driving off while the screensaver is up: the dashboard comes back (the cat, if it's asleep on
+     * the roof, bolts first). Two GPS fixes above ~8 km/h, so standstill jitter never wakes it. The
+     * idle screensaver always closes; one started by hand closes too unless that's switched off.
+     */
+    void saverSpeedCheck(float ms) {
+        if (!saverOn) { saverMoveFixes = 0; return; }
+        if (ms < 2.2f) { saverMoveFixes = 0; return; }
+        if (++saverMoveFixes < 2) return;
+        if (!saverMayAutoClose()) return;
+        saverMoveFixes = 0;
+        Diag.log("ui", "screensaver closed: the car is moving (" + Math.round(ms * 3.6f) + " km/h)");
+        if (!saver.catTap(this::hideSaver)) hideSaver();
+    }
+
+    /** The idle screensaver always may; one started by hand only if Settings says so (default yes). */
+    boolean saverMayAutoClose() { return !saverManual || sp.getBoolean("saverMoveOff", true); }
+
+    void showSaver(boolean manual) {
+        saverManual = manual;
+        saverMoveFixes = 0;
+        showSaver();
+    }
+
     void showSaver() {
-        Diag.log("ui", "screensaver on");
         if (saverOn || saver == null) return;
+        Diag.log("ui", "screensaver on (" + (saverManual ? "started by hand" : "idle") + ")");
         saverOn = true;
         saverAt = SystemClock.elapsedRealtime();
         ui.removeCallbacks(idleR);
@@ -3050,21 +3099,23 @@ public class MainActivity extends Activity {
     }
 
     void hideSaver() {
-        if (saverOn) Diag.log("ui", "screensaver off");
         if (!saverOn) return;
+        Diag.log("ui", "screensaver off");
         saverOn = false;
         saver.animate().cancel();
         mainView.setVisibility(View.VISIBLE);
         if (resumed) {
-            // quick fade back to the dashboard (GPU layer: one texture, no redraws)
-            saver.animate().alpha(0f).setDuration(220).withLayer().withEndAction(() -> {
+            // quick fade back to the dashboard (GPU layer: one texture, no redraws). The dashboard was
+            // invisible behind the saver, so its first frame back is a heavy one: start the fade two
+            // frames later, while the saver still covers it, and the fade itself never stutters
+            saver.animate().alpha(0f).setStartDelay(34).setDuration(220).withLayer().withEndAction(() -> {
                 if (!saverOn) { saver.stop(); saver.setVisibility(View.GONE); }
             }).start();
         } else {
             saver.stop();
             saver.setVisibility(View.GONE);
         }
-        drive.setActive(resumed);
+        syncDriveActive();
         if (resumed) renderState(); // restart the progress ticker
         updateCamSession();
         resetIdle();
@@ -3081,7 +3132,7 @@ public class MainActivity extends Activity {
         }
         new AlertDialog.Builder(this, dlg())
                 .setTitle("Screensaver  ·  the moon on the dock starts it now")
-                .setPositiveButton("Start now", (d, w) -> showSaver())
+                .setPositiveButton("Start now", (d, w) -> showSaver(true))
                 .setSingleChoiceItems(names, cur, (d, w) -> {
                     sp.edit().putInt("saverMin", opts[w]).apply();
                     d.dismiss();

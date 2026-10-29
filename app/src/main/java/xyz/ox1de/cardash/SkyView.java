@@ -97,11 +97,11 @@ public class SkyView extends FrameLayout {
             if (strip.w > 0) {
                 float speed = strip.w * 0.012f / 1000f;                     // px per ms (same as before)
                 float x = ((SystemClock.uptimeMillis() - cloudT0) * speed) % strip.w - strip.w;
-                // move only once it's travelled ~0.16 px: 30 updates a second on a 60 Hz panel, every
-                // frame on a slower one; sub-pixel steps with filtering, so it glides
-                if (Math.abs(x - lastX) >= 0.16f) { lastX = x; strip.setTranslationX(x); }
+                if (x != lastX) { lastX = x; strip.setTranslationX(x); }   // sub-pixel step, filtered: it glides
             }
-            Choreographer.getInstance().postFrameCallback(this);
+            // next update on the first vsync after ~30 ms: ~30 moves a second, and the UI thread
+            // sleeps through the frames in between instead of waking just to skip them
+            Choreographer.getInstance().postFrameCallbackDelayed(this, 30);
         }
     };
 

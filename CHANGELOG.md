@@ -3,6 +3,30 @@
 All notable changes to CarDash. Versions follow `MAJOR.MINOR[.PATCH]`; pre-releases are tagged
 `vX.Y-betaN`. Each `## vX.Y` section below becomes the notes of the matching GitHub release.
 
+## v3.3 — 2026-10-29
+
+### Fixed
+- **The screensaver now goes away when you drive off.** Before, only a touch closed it. Now the
+  dashboard comes back as soon as GPS reads two fixes in a row above about 8 km/h (so standstill
+  jitter can't do it), and the sleeping cat bolts off the roof first. It also closes when a head unit
+  that kept CarDash on screen through its sleep wakes up on ignition.
+
+### Added
+- *Settings → Screensaver started by hand closes when you drive off: yes / no* (default yes). The
+  screensaver you start yourself (moon key, *Start now*) can stay up while you drive if you prefer;
+  the automatic one always closes.
+
+### Changed
+- **Smoother on slow units:**
+  - The road scene stays paused behind *any* cover (screensaver, All apps, dash cam) and resumes in one
+    place when it's uncovered, so it never runs unseen.
+  - The cloud drift wakes the UI thread about 30 times a second instead of on every screen refresh.
+  - Coming back from the screensaver, opening All apps and the start-up rise each wait a frame or
+    two for the heavy first frame (layout, textures) to finish, so the animation itself doesn't stutter.
+  - Returning to the home screen no longer re-reads the app list when nothing was installed or removed.
+- Diagnostic logs: if root isn't available after all, the log capture falls back to CarDash's own
+  log instead of capturing nothing. Frame tracking is detached when the home screen closes.
+
 ## v3.2.1 — 2026-10-28
 
 (First published as v3.2, which by mistake contained the v3.1 build; v3.2.1 is the real one.)

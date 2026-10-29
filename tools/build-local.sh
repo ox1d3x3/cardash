@@ -5,7 +5,7 @@ set -euo pipefail
 ANDROID_JAR=$(realpath "$1"); BT=$(realpath "$2")
 ROOT=$(cd "$(dirname "$0")/.." && pwd); SRC=$ROOT/app/src/main
 OUT=$ROOT/build-local; rm -rf "$OUT"; mkdir -p "$OUT"/{res,gen,classes,dex,bin}
-VERSION_CODE=${VERSION_CODE:-3020199}; VERSION_NAME=${VERSION_NAME:-3.2.1}
+VERSION_CODE=${VERSION_CODE:-3030099}; VERSION_NAME=${VERSION_NAME:-3.3}
 
 unzip -q -o -j "$BT" linux/aapt2 -d "$OUT/bin"; chmod +x "$OUT/bin/aapt2"; AAPT2=$OUT/bin/aapt2
 

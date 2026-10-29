@@ -227,8 +227,12 @@ updates itself, so there is nothing to copy over by USB after the first install.
   with a 60-tick seconds ring, date, **media controls** (previous / play-pause / next), now
   playing, and your speed if you pull away. *Settings → Parked car on screensaver* turns the car
   off. The media controls work without closing the screensaver; a touch anywhere else wakes the
-  dashboard without pressing what's underneath. Also available as Android's system screensaver ("CarDash Clock") where the unit has
-  that menu.
+  dashboard without pressing what's underneath.
+  **Driving off closes it**: two GPS fixes in a row above about 8 km/h (or the head unit waking up
+  on ignition) bring the dashboard back, and the cat bolts first. The automatic screensaver always
+  closes; for one you started by hand, *Settings → Screensaver started by hand closes when you drive
+  off* chooses yes (default) or no. Also available as Android's system screensaver
+  ("CarDash Clock") where the unit has that menu.
 - **Sleepy cat** (*Settings → Sleepy cat on the parked car*, on by default): a moment after the car
   locks, a ginger tabby walks in, stops beside the car, wiggles, jumps onto the roof, turns round
   once and curls up to sleep, breathing, with little z's drifting up. Tap the screen and it startles
