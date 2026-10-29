@@ -167,6 +167,7 @@ public class DriveView extends View {
     public void setActive(boolean a) {
         active = a;
         lastFrame = 0;
+        if (!a) { frames.cancel(); Pace.measuring = false; }
         syncSky();
         if (a) kick();
     }
@@ -191,6 +192,18 @@ public class DriveView extends View {
     @Override
     protected void onSizeChanged(int w, int h, int ow, int oh) {
         if (w == 0 || h == 0) return;
+        if (Diag.on != null) {   // a resize rebuilds the scene: log what moved, to find needless ones
+            StringBuilder b = new StringBuilder("car view ").append(w).append('x').append(h)
+                    .append(" (was ").append(ow).append('x').append(oh).append(')');
+            android.view.ViewParent box = getParent();
+            if (box instanceof View && ((View) box).getParent() instanceof android.view.ViewGroup) {
+                android.view.ViewGroup col = (android.view.ViewGroup) ((View) box).getParent();
+                b.append(", column rows");
+                for (int i = 0; i < col.getChildCount(); i++) b.append(' ').append(col.getChildAt(i).getHeight());
+            }
+            b.append(", window ").append(getRootView().getHeight());
+            Diag.log("ui", b.toString());
+        }
         layoutGeometry();
         buildShaders();
         rebuildCar();
@@ -308,6 +321,9 @@ public class DriveView extends View {
         if (active && isAttachedToWindow()) postInvalidateOnAnimation();
     }
 
+    /** Next animation frame: every refresh, or every other one on a unit that can't hold 60 fps. */
+    final Pace.Frames frames = new Pace.Frames(this);
+
     static float approach(float v, float goal, float d) {
         if (v < goal) return Math.min(goal, v + d);
         if (v > goal) return Math.max(goal, v - d);
@@ -390,9 +406,11 @@ public class DriveView extends View {
 
         if (more && active) {
             lastFrame = now;
-            postInvalidateOnAnimation();
+            Pace.measuring = shown > 0.5f;         // the road is moving: these frames tell Auto how the unit copes
+            frames.next(now);
         } else {
             lastFrame = 0;                         // still: no frames (the sky layer keeps itself alive)
+            Pace.measuring = false;
         }
     }
 

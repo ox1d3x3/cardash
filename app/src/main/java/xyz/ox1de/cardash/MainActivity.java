@@ -40,6 +40,7 @@ import android.provider.Settings;
 import android.text.TextUtils;
 import android.text.format.DateFormat;
 import android.util.TypedValue;
+import android.view.Choreographer;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -349,29 +350,56 @@ public class MainActivity extends Activity {
         }
         Diag.log("life", "onCreate (" + (b == null ? "cold start" : "recreated") + ") in " + (SystemClock.uptimeMillis() - t0) + " ms");
         Diag.watchFrames(getWindow());
+        Pace.setMode(sp.getInt("motion", Pace.AUTO));
+        Pace.watch(getWindow());
+        Diag.log("perf", "motion " + Pace.describe() + (Pace.mode == Pace.AUTO ? " (first guess for this unit)" : ""));
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         resumed = true;
+        resumedAt = SystemClock.uptimeMillis();
         Diag.log("life", "onResume");
         if (diagPending) { diagPending = false; setDiag(true); }
         updateClock();
         syncVolume();
-        startLocation();
-        connectMedia();
         applyImmersive();
         syncDriveActive();
-        updateCamSession(); // Dash cam layout: bring the tile back
+        // The rest talks to system services (location, media sessions, memory, camera), which can be
+        // slow just after the unit wakes up, when everything else is waking too: it waits until the
+        // dashboard has been drawn, so the screen comes back at once instead of after half a second.
+        Choreographer.getInstance().removeFrameCallback(afterFirstFrame);
+        Choreographer.getInstance().postFrameCallback(afterFirstFrame);
         if (dashLayout()) ui.postDelayed(linkCheck, 5000);
-        updateRam();
         ui.postDelayed(ramTick, 15_000);
         ui.postDelayed(homeClean, 1500);   // you just came back home: tidy up after the app you left
         ui.postDelayed(periodicClean, 3 * 60_000);
         if (updater.dueForAutoCheck()) ui.postDelayed(updCheckR, 25_000); // give the unit's network time to come up
         if (updater.state == Updater.State.READY) ui.postDelayed(updInstallR, 30_000);
         resetIdle();
+    }
+
+    long resumedAt;
+
+    /** Runs in the first frame after onResume and queues {@link #resumeWork} behind that frame's drawing. */
+    final Choreographer.FrameCallback afterFirstFrame = new AfterFirstFrame();
+    class AfterFirstFrame implements Choreographer.FrameCallback {
+        @Override public void doFrame(long nanos) { ui.removeCallbacks(resumeWork); ui.post(resumeWork); }
+    }
+
+    final Runnable resumeWork = new ResumeWork();
+    class ResumeWork implements Runnable {
+        @Override public void run() {
+            if (!resumed) return;
+            long t0 = SystemClock.uptimeMillis();
+            startLocation();
+            connectMedia();
+            updateCamSession(); // Dash cam layout: bring the tile back
+            updateRam();
+            if (Diag.on != null) Diag.log("life", "dashboard back on screen " + (t0 - resumedAt) + " ms after onResume; "
+                    + "location, media and memory took " + (SystemClock.uptimeMillis() - t0) + " ms after that");
+        }
     }
 
     @Override
@@ -407,6 +435,8 @@ public class MainActivity extends Activity {
         ui.removeCallbacks(updCheckR);
         ui.removeCallbacks(updInstallR);
         ui.removeCallbacks(idleR);
+        Choreographer.getInstance().removeFrameCallback(afterFirstFrame);
+        ui.removeCallbacks(resumeWork);
         // Do nothing while another app (maps, player) is in front: saves CPU + RAM on 2GB units.
         stopLocation();
         disconnectMedia();
@@ -416,6 +446,7 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         super.onDestroy();
         Diag.unwatchFrames();
+        Pace.unwatch(getWindow());
         if (receiversOn) {
             try { unregisterReceiver(timeRx); } catch (Exception ignored) { }
             try { unregisterReceiver(volRx); } catch (Exception ignored) { }
@@ -1740,9 +1771,10 @@ public class MainActivity extends Activity {
             if (open) {
                 k.setVisibility(View.VISIBLE);
                 k.setAlpha(0f);
-                k.animate().alpha(1f).setStartDelay(60).setDuration(180).setInterpolator(Anim.OUT).withLayer().start();
+                // small keys: fading them directly is cheaper than building a layer for them
+                k.animate().alpha(1f).setStartDelay(60).setDuration(180).setInterpolator(Anim.OUT).start();
             } else {
-                k.animate().alpha(0f).setStartDelay(0).setDuration(120).withLayer()
+                k.animate().alpha(0f).setStartDelay(0).setDuration(120)
                         .withEndAction(() -> { if (!drawerOpen) k.setVisibility(View.INVISIBLE); }).start();
             }
         }
@@ -1933,6 +1965,7 @@ public class MainActivity extends Activity {
         final boolean saverCat = sp.getBoolean("saverCat", true);
         labels.add("Sleepy cat on the parked car:  " + (saverCat ? "on" : "off"));
         acts.add(() -> { sp.edit().putBoolean("saverCat", !saverCat).apply(); applyCar(); toast("Sleepy cat: " + (!saverCat ? "on" : "off")); });
+        labels.add("Smooth motion:  " + Pace.describe());                         acts.add(this::pickMotion);
         labels.add("RAM optimiser…");                                            acts.add(this::showOptimizer);
         labels.add("Layout:  " + (dashLayout() ? "Dash cam" : "Standard"));       acts.add(this::pickLayout);
         labels.add("Dash cam…");                                                 acts.add(this::showCamSettings);
@@ -2201,7 +2234,9 @@ public class MainActivity extends Activity {
         boolean light = mode == 3 || (mode < 2 && !night);
         Look want = light ? Look.LIGHT : Look.DARK;
         if (want == look && !force) return;
-        if (!force && look != null && resumed && !saverOn) crossfadeTheme(want);
+        // cross-fade only while the dashboard is in use: right after the unit wakes up (or CarDash comes
+        // back) the old picture is stale anyway, and a full-screen read-back then is just extra work
+        if (!force && look != null && resumed && !saverOn && SystemClock.uptimeMillis() - resumedAt > 2000) crossfadeTheme(want);
         else applyTheme(want);
     }
 
@@ -3090,10 +3125,15 @@ public class MainActivity extends Activity {
         saver.setSpeed(v >= 5 ? v + (mph() ? " MPH" : " KM/H") : "");
         saver.setAlpha(0f);
         saver.setVisibility(View.VISIBLE);
+        saver.holdIntro(true);   // the car rolls in once the fade is done (one still picture while fading)
         saver.start();
         updateCamSession(); // no camera streaming behind the screensaver
-        saver.animate().alpha(1f).setDuration(700).withLayer()
-                .withEndAction(() -> { if (saverOn) mainView.setVisibility(View.INVISIBLE); }) // nothing drawn underneath
+        saver.animate().alpha(1f).setStartDelay(0).setDuration(700).setInterpolator(Anim.OUT).withLayer()
+                .withEndAction(() -> {
+                    if (!saverOn) return;
+                    mainView.setVisibility(View.INVISIBLE);   // nothing drawn underneath from now on
+                    saver.holdIntro(false);
+                })
                 .start();
         drive.setActive(false);
     }
@@ -3120,6 +3160,26 @@ public class MainActivity extends Activity {
         updateCamSession();
         resetIdle();
         if (resumed && SystemClock.elapsedRealtime() - saverAt >= NEW_SESSION_MS) queueGreeting(false, 260);
+    }
+
+    /** Frame rate of the long animations (road, screensaver cat, clouds): Auto measures this unit. */
+    void pickMotion() {
+        String[] names = {
+                "Auto (recommended): 60 fps if this unit keeps up, otherwise a steady 30  ·  now " + (Pace.slow ? "30" : "60"),
+                "60 fps: smoothest, for quick units",
+                "30 fps: lightest, steady on slow units, cooler and quieter for the other apps"};
+        new AlertDialog.Builder(this, dlg())
+                .setTitle("Smooth motion")
+                .setSingleChoiceItems(names, Pace.mode, (d, w) -> {
+                    sp.edit().putInt("motion", w).apply();
+                    Pace.setMode(w);
+                    if (w == Pace.AUTO) Pace.watch(getWindow());
+                    Diag.log("perf", "motion set to " + Pace.describe());
+                    d.dismiss();
+                    toast("Smooth motion: " + Pace.describe());
+                })
+                .setNegativeButton("Close", null)
+                .show();
     }
 
     void pickSaver() {
@@ -3791,7 +3851,40 @@ public class MainActivity extends Activity {
 
     final Runnable updCheckR = new UpdCheck();
     class UpdCheck implements Runnable {
-        @Override public void run() { if (resumed) updater.check(updater.action() != Updater.ACT_NOTIFY, null); }
+        @Override public void run() {
+            if (!resumed) return;
+            if (!online()) {                   // no network yet (just woke up, hotspot still joining): wait for it
+                ui.postDelayed(this, 60_000);
+                return;
+            }
+            updater.check(updater.action() != Updater.ACT_NOTIFY, () -> {
+                if (updater.state == Updater.State.FAILED && updater.release == null) {
+                    // a background check that failed (no internet yet, a dropped connection): try again
+                    // quietly a few times instead of waiting six hours
+                    if (resumed && updRetry < UPD_RETRY.length) {
+                        long d = UPD_RETRY[updRetry++];
+                        Diag.log("update", "retrying in " + (d / 60_000) + " min");
+                        ui.removeCallbacks(updCheckR);
+                        ui.postDelayed(updCheckR, d);
+                    }
+                } else {
+                    updRetry = 0;
+                }
+            });
+        }
+    }
+
+    static final long[] UPD_RETRY = {60_000, 5 * 60_000, 20 * 60_000};
+    int updRetry;
+
+    boolean online() {
+        try {
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            android.net.NetworkInfo ni = cm == null ? null : cm.getActiveNetworkInfo();
+            return ni != null && ni.isConnected();
+        } catch (Exception e) {
+            return true;                       // can't tell: just try
+        }
     }
 
     /** "Install automatically when parked": installs once the car is parked and nothing is in the way. */

@@ -173,7 +173,15 @@ final class Updater {
         set(State.CHECKING);
         ex.execute(() -> {
             try {
-                Release r = latest();
+                Release r;
+                try {
+                    r = latest();
+                } catch (java.io.IOException first) {
+                    // a connection dropped mid-handshake is common right after the unit wakes up or the
+                    // phone's hotspot joins: one more go a few seconds later before calling it failed
+                    try { Thread.sleep(4000); } catch (InterruptedException ignored) { }
+                    r = latest();
+                }
                 sp.edit().putLong("updLast", System.currentTimeMillis()).apply();
                 int mine = code(installedName());
                 if (r == null || r.code <= mine) {
@@ -186,11 +194,21 @@ final class Updater {
                     else { set(State.AVAILABLE); if (autoDownload) downloadNow(r); }
                 }
             } catch (Exception e) {
-                error = "Couldn't reach GitHub (" + e.getClass().getSimpleName() + ")";
+                error = "Couldn't reach GitHub (" + why(e) + ")";
                 set(State.FAILED);
             }
             if (then != null) ui.post(then);
         });
+    }
+
+    /** "SSLException: Connection reset by peer": the type and the gist, without native pointers. */
+    static String why(Throwable e) {
+        String m = e.getMessage();
+        if (m == null && e.getCause() != null) m = e.getCause().getMessage();
+        if (m == null) return e.getClass().getSimpleName();
+        m = m.replaceAll("ssl=0x[0-9a-fA-F]+: ?", "").trim();
+        if (m.length() > 90) m = m.substring(0, 90) + "…";
+        return e.getClass().getSimpleName() + ": " + m;
     }
 
     Release latest() throws Exception {
@@ -330,7 +348,7 @@ final class Updater {
         } catch (Exception e) {
             //noinspection ResultOfMethodCallIgnored
             part.delete();
-            error = "Download failed (" + e.getMessage() + ")";
+            error = "Download failed (" + why(e) + ")";
             set(State.FAILED);
         }
     }
@@ -406,7 +424,7 @@ final class Updater {
                     s.commit(cb.getIntentSender());
                 }
             } catch (Exception e) {
-                error = "Install failed (" + e.getMessage() + ")";
+                error = "Install failed (" + why(e) + ")";
                 set(State.FAILED);
             }
         });

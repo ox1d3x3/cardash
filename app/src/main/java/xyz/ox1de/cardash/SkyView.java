@@ -87,21 +87,25 @@ public class SkyView extends FrameLayout {
         updateTicker();
     }
 
-    // ---- cloud drift: vsync-driven, applied every other frame (30 fps), translation only
+    // ---- cloud drift: vsync-aligned, translation only
 
     boolean ticking;
     float lastX = 1;
     final Choreographer.FrameCallback tick = new Choreographer.FrameCallback() {
         @Override public void doFrame(long nanos) {
             if (!ticking) return;
+            long next = 30;
             if (strip.w > 0) {
-                float speed = strip.w * 0.012f / 1000f;                     // px per ms (same as before)
+                float speed = strip.w * 0.012f / 1000f;                     // px per ms (~5 px a second)
                 float x = ((SystemClock.uptimeMillis() - cloudT0) * speed) % strip.w - strip.w;
                 if (x != lastX) { lastX = x; strip.setTranslationX(x); }   // sub-pixel step, filtered: it glides
+                // ~0.16 px steps (30 a second); on a slow unit 0.5 px steps (10 a second): each move
+                // redraws the whole screen there, and soft clouds still glide at half a pixel
+                float step = Pace.half() ? 0.5f : 0.16f;
+                next = Math.max(16, (long) (step / speed) - 4);
             }
-            // next update on the first vsync after ~30 ms: ~30 moves a second, and the UI thread
-            // sleeps through the frames in between instead of waking just to skip them
-            Choreographer.getInstance().postFrameCallbackDelayed(this, 30);
+            // the UI thread sleeps between moves instead of waking every refresh just to skip it
+            Choreographer.getInstance().postFrameCallbackDelayed(this, next);
         }
     };
 
@@ -128,6 +132,7 @@ public class SkyView extends FrameLayout {
     protected void onDetachedFromWindow() {
         ticking = false;
         Choreographer.getInstance().removeFrameCallback(tick);
+        removeCallbacks(twinkleR);
         super.onDetachedFromWindow();
     }
 
@@ -141,7 +146,19 @@ public class SkyView extends FrameLayout {
         sc.drawSky(c, n, now);
         if (!running) return;
         if (sc.shooting(now)) postInvalidateOnAnimation();          // a shooting star: full rate while it flies
-        else if (sc.starsVisible(n)) postInvalidateDelayed(83);     // twinkle: 12 fps is plenty for a slow fade
+        else if (sc.starsVisible(n)) {                              // twinkle: a slow fade, 12 fps is plenty (8 on a slow unit)
+            removeCallbacks(twinkleR);                              // one pending redraw at most, never a pile-up
+            postDelayed(twinkleR, Pace.half() ? 125 : 83);
+        }
+    }
+
+    final Runnable twinkleR = this::invalidate;
+
+    // The strip is laid out here, directly, at its own size (twice the sky's width): setting its
+    // layout params from inside a layout pass forced a second layout of the whole screen.
+    @Override
+    protected void onLayout(boolean changed, int l, int t, int r, int b) {
+        strip.place();
     }
 
     /** The cloud bitmap twice side by side (2 x width), so sliding it by one width loops seamlessly. */
@@ -157,13 +174,14 @@ public class SkyView extends FrameLayout {
             clouds = b;
             w = width;
             y = top;
-            LayoutParams lp = (LayoutParams) getLayoutParams();
-            if (lp != null && b != null) {
-                lp.width = width * 2;
-                lp.height = Math.round(top + b.getHeight()) + 2;
-                setLayoutParams(lp);
-            }
+            place();
             invalidate();
+        }
+
+        void place() {
+            if (clouds == null) return;
+            int pw = w * 2, ph = Math.round(y + clouds.getHeight()) + 2;
+            if (getLeft() != 0 || getTop() != 0 || getWidth() != pw || getHeight() != ph) layout(0, 0, pw, ph);
         }
 
         @Override public boolean hasOverlappingRendering() { return false; } // alpha straight onto the two bitmaps

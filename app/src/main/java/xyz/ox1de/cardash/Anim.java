@@ -73,10 +73,20 @@ final class Anim {
         v.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(340).setInterpolator(SOFT).withLayer().start();
     }
 
-    /** Dashboard cards rise in, one after another (cold start only). */
+    /**
+     * Dashboard cards rise in, one after another (cold start only). The hardware layer is set up
+     * front rather than with withLayer(): withLayer() pre-builds the layer the moment the animation
+     * starts, which at start-up can be before the card is drawn at all, so it was rendered, thrown
+     * away and rendered again. Set up front, the first frame that draws the card builds it once.
+     */
     static void rise(View v, float dy, long delay) {
         v.setAlpha(0f);
         v.setTranslationY(dy);
-        v.animate().alpha(1f).translationY(0f).setStartDelay(delay).setDuration(420).setInterpolator(OUT).withLayer().start();
+        v.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        v.animate().alpha(1f).translationY(0f).setStartDelay(delay).setDuration(420).setInterpolator(OUT)
+                .withEndAction(() -> v.setLayerType(View.LAYER_TYPE_NONE, null)).start();
+        // if anything cancels the rise, don't leave the card on a layer
+        v.postDelayed(() -> { if (v.getLayerType() != View.LAYER_TYPE_NONE) v.setLayerType(View.LAYER_TYPE_NONE, null); },
+                delay + 1500);
     }
 }

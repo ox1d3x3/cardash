@@ -59,6 +59,18 @@ final class RearScene {
     final Paint roadRed = new Paint(Paint.ANTI_ALIAS_FLAG);
     final Paint bmp = new Paint(Paint.FILTER_BITMAP_FLAG);
     final Path roadPath = new Path(), edgePath = new Path(), beamPath = new Path(), cornerPath = new Path(), q = new Path();
+
+    // Android 8.1 and older draw with HWUI's OpenGL renderer, which has no fast path for drawPath:
+    // every path is rasterised on the CPU into a mask texture and uploaded. The static paths above
+    // are cached, but the buildings, windows and dashes change shape every frame (~100 paths a frame
+    // while driving). There each quad is drawn instead as a plain rectangle under a perspective
+    // matrix that maps it exactly onto the quad: the GPU just transforms 4 corners. Android 9+ (Skia)
+    // draws small convex paths fast, so it keeps them.
+    static final boolean RECT_QUADS = android.os.Build.VERSION.SDK_INT < 28;
+    final android.graphics.Matrix qm = new android.graphics.Matrix();
+    final float[] qs = new float[8], qd = new float[8];
+    float qw, qh;
+    final Paint dash = new Paint(Paint.ANTI_ALIAS_FLAG);   // the dashes' paint for the matrix route (no shader)
     float glowR;
 
     // sky (built once per size)
@@ -296,6 +308,14 @@ final class RearScene {
                 float yTop = blockH(idx, side);
                 float xi = side * BLOCK_X, xo = side * BLOCK_X2;
                 face.setColor(mix(faceCol, fogCol, fog));
+                if (RECT_QUADS && drawFaceRects(c, idx, side, xi, yTop, z0, zc0, z1, fog, n, faceCol, fogCol)) {
+                    if (z0 > zNear) {
+                        face.setColor(mix(frontCol, fogCol, fog));
+                        float l = sx(Math.min(xi, xo), z0), r = sx(Math.max(xi, xo), z0);
+                        c.drawRect(l, syH(yTop, z0), r, sy(z0), face);
+                    }
+                    continue;
+                }
                 q.rewind();
                 q.moveTo(sx(xi, zc0), sy(zc0));
                 q.lineTo(sx(xi, zc0), syH(yTop, zc0));
@@ -336,7 +356,64 @@ final class RearScene {
         }
     }
 
+    /**
+     * The road-facing wall of a block and its window rows, as rectangles in the wall's own
+     * coordinates under one perspective matrix (see RECT_QUADS).
+     * @return false if the wall is too thin to map (the caller falls back to a path)
+     */
+    boolean drawFaceRects(Canvas c, int idx, int side, float xi, float yTop, float z0, float zc0, float z1,
+                          float fog, float n, int faceCol, int fogCol) {
+        float xn = sx(xi, zc0), xf = sx(xi, z1);
+        int sv = c.save();
+        // wall-local: u along the road (near edge u = 0), v down from the roof line (v = 0) to the ground
+        if (!quadMatrix(c, xn, syH(yTop, zc0), xf, syH(yTop, z1), xf, sy(z1), xn, sy(zc0))) {
+            c.restoreToCount(sv);
+            return false;
+        }
+        c.drawRect(0, 0, qw, qh, face);
+        if (fog < 0.85f) {
+            float wz0 = Math.max(zc0, z0 + 0.25f), wz1 = z1 - 0.25f;
+            if (wz1 > wz0) {
+                float ku = qw / (z1 - zc0), kv = qh / yTop;
+                float u0 = (wz0 - zc0) * ku, u1 = (wz1 - zc0) * ku;
+                for (int b = 0; b < 5; b++) {
+                    float y0 = 0.42f + b * 0.5f, y1 = y0 + 0.2f;
+                    if (y1 > yTop - 0.2f) break;
+                    int hsh = hash(idx, side, b);
+                    float litA = (hsh & 3) != 0 ? n : 0.12f * n;          // 3 in 4 rows lit at night
+                    float dayA = 1f - n;
+                    int col = mix(mix(WIN_D, faceCol, 0.35f), WIN_N, n * ((hsh & 3) != 0 ? 1f : 0.15f));
+                    face.setColor(mix(col, fogCol, fog * (1f - 0.55f * litA)));
+                    face.setAlpha((int) (255 * Math.min(1f, 0.55f * dayA + 0.9f * litA)));
+                    c.drawRect(u0, (yTop - y1) * kv, u1, (yTop - y0) * kv, face);
+                }
+                face.setAlpha(255);
+            }
+        }
+        c.restoreToCount(sv);
+        return true;
+    }
+
+    /**
+     * Concat the perspective map that takes the rectangle (0,0)-(qw,qh) exactly onto the quad
+     * tl, tr, br, bl. qw / qh are the quad's own size on screen, so one local unit is about a pixel
+     * and the renderer's edge anti-aliasing stays about a pixel wide.
+     */
+    boolean quadMatrix(Canvas c, float tlx, float tly, float trx, float tr_y, float brx, float bry, float blx, float bly) {
+        float minX = Math.min(Math.min(tlx, trx), Math.min(brx, blx)), maxX = Math.max(Math.max(tlx, trx), Math.max(brx, blx));
+        float minY = Math.min(Math.min(tly, tr_y), Math.min(bry, bly)), maxY = Math.max(Math.max(tly, tr_y), Math.max(bry, bly));
+        if (maxX - minX < 0.5f || maxY - minY < 0.5f) return false;
+        qw = Math.max(1f, maxX - minX);
+        qh = Math.max(1f, maxY - minY);
+        qs[0] = 0;  qs[1] = 0;  qs[2] = qw; qs[3] = 0;  qs[4] = qw; qs[5] = qh; qs[6] = 0;  qs[7] = qh;
+        qd[0] = tlx; qd[1] = tly; qd[2] = trx; qd[3] = tr_y; qd[4] = brx; qd[5] = bry; qd[6] = blx; qd[7] = bly;
+        if (!qm.setPolyToPoly(qs, 0, qd, 0, 4)) return false;
+        c.concat(qm);
+        return true;
+    }
+
     void drawDashes(Canvas c, float dashOff, int alpha) {
+        if (RECT_QUADS) { drawDashRects(c, dashOff, alpha); return; }
         lane.setAlpha(alpha);
         int kMax = (int) Math.floor((Z_DASH + dashOff) / DASH_P);
         int kMin = (int) Math.ceil((zNear - DASH_L + dashOff) / DASH_P);
@@ -349,6 +426,31 @@ final class RearScene {
                 q.rewind();
                 addQuad(q, x - DASH_W, x + DASH_W, x - DASH_W, x + DASH_W, z0, z1);
                 c.drawPath(q, lane);
+            }
+        }
+    }
+
+    /** Dashes as rectangles under a perspective matrix each (see RECT_QUADS). */
+    void drawDashRects(Canvas c, float dashOff, int alpha) {
+        dash.setColor(0xFFFFFFFF);
+        float fadeH = D * 0.35f;                  // same fade out of the haze as the lane shader
+        int kMax = (int) Math.floor((Z_DASH + dashOff) / DASH_P);
+        int kMin = (int) Math.ceil((zNear - DASH_L + dashOff) / DASH_P);
+        for (int k = kMin; k <= kMax; k++) {
+            float z0 = Math.max(zNear, k * DASH_P - dashOff), z1 = k * DASH_P - dashOff + DASH_L;
+            if (z1 <= z0) continue;
+            float yN = sy(z0), yF = sy(z1);
+            float fade = Math.min(1f, Math.max(0f, ((yN + yF) / 2f - hY) / fadeH));
+            int a = (int) (alpha * fade);
+            if (a < 2) continue;
+            dash.setAlpha(a);
+            for (int side = -1; side <= 1; side += 2) {
+                float x = side * LANE_X;
+                int sv = c.save();
+                if (quadMatrix(c, sx(x - DASH_W, z1), yF, sx(x + DASH_W, z1), yF, sx(x + DASH_W, z0), yN, sx(x - DASH_W, z0), yN)) {
+                    c.drawRect(0, 0, qw, qh, dash);
+                }
+                c.restoreToCount(sv);
             }
         }
     }

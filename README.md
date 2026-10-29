@@ -90,7 +90,7 @@ no third-party libraries, an APK under 0.5 MB, and zero frames drawn when nothin
 
 | | |
 | --- | --- |
-| Android | 8.0 (API 26) or newer. Developed on Android 13. |
+| Android | 8.0 (API 26) or newer. Tested on an MT6580 head unit (Android 8.1, quad Cortex-A7, Mali-400). |
 | Screen | Landscape. Tuned for 1280×720, also fits 1024×600. |
 | Memory | Runs comfortably on 2 GB RAM units. |
 | Sensors | GPS for speed. No CAN-bus access needed. |
@@ -299,7 +299,7 @@ updates itself, so there is nothing to copy over by USB after the first install.
   showing, so a hidden status bar gives its whole strip back to the dashboard (some head units kept
   reporting that space even with the bar hidden).
 - **Settings** (slider icon): updates, greeting, music card, music player, theme, car colour, style, view and number
-  plate, rear badge, units, speed alert, screensaver, sleepy cat, RAM optimiser, layout, dash cam, resume music, media
+  plate, rear badge, units, speed alert, screensaver, sleepy cat, smooth motion, RAM optimiser, layout, dash cam, resume music, media
   access, location, system bars, set as Home app, reset dock, About CarDash (version, developer
   Mahabub Subhany / [ox1d3x3](https://github.com/ox1d3x3), source code, update check).
 
@@ -394,11 +394,31 @@ CarDash is built to cost nothing when nothing changes.
 - **No frames while idle.** The road animates only while the car moves or a light is fading, and a
   GPS fix that says "still parked" doesn't redraw anything. Parked, or with another app in front:
   no road frames, no CPU.
+- **Smooth motion that fits the unit** (*Settings → Smooth motion*). On a head unit that can't finish
+  a frame inside one 60 Hz refresh, "60 fps" really means uneven motion (some frames reach the screen
+  a refresh late) and a hot CPU; a steady 30 fps looks smoother there and costs half. *Auto* starts
+  from a guess (32-bit-only units are the slow ones), measures the real frame times while the road
+  is moving, moves up to 60 if frames are quick and settles back on 30 if 60 can't be held. Applies
+  to the road, the screensaver's car and cat, the cloud drift and the stars; menus and fades always
+  follow the display.
+- **Shapes the old GPU renderer draws fast.** Android 8.1 and older draw with HWUI's OpenGL renderer,
+  where every `drawPath` is rasterised on the CPU into a texture and uploaded. The road's buildings,
+  windows and lane dashes change shape every frame, so there each one is drawn as a plain
+  rectangle under a perspective matrix that maps it exactly onto its quad (four corners for the GPU
+  to transform, no rasterising). Android 9+ keeps paths, which its Skia renderer draws fast.
 - **The sky is its own layer.** In the chase cam the sky (gradients, sun, moon, stars, clouds) sits
-  under the road on a separate view. The clouds glide by moving that layer only (30 updates a
-  second, sub-pixel), so the road, buildings and car are never redrawn for them; stars twinkle at
-  12 fps in the sky layer alone, a shooting star runs at full rate only while it flies. All of it
-  stops behind the drawer, the camera, the screensaver or another app.
+  under the road on a separate view. The clouds glide by moving that layer only (sub-pixel steps:
+  30 a second, or 10 half-pixel steps on a slow unit), so the road, buildings and car are never
+  redrawn for them; stars twinkle at 12 fps (8 on a slow unit) in the sky layer alone, a shooting
+  star runs at full rate only while it flies. All of it stops behind the drawer, the camera, the
+  screensaver or another app.
+- **A screensaver that rests.** One redraw a second for the clock. The sleeping cat is painted once
+  into a small picture that breathes by scaling, so its 8-10 redraws a second are a few bitmap
+  draws; there is only ever one redraw pending. The car rolls in after the fade from the
+  dashboard, so the fade is one still picture and nothing draws underneath once it's done.
+- **A quick wake-up.** After the unit sleeps, the dashboard is drawn first; location, media sessions
+  and memory figures (system services that are slow while everything else wakes up too) follow
+  right after, and the day / night theme switches instantly instead of cross-fading a stale picture.
 - **Background work stays in the background.** App icons, album art, badge import and car rendering
   run on threads at Android's background priority, so they never take CPU from an animation.
 - **Render once, composite every frame.** Car art, lamp bands and sky layers are rasterised once on
@@ -499,6 +519,7 @@ by hand.
 app/src/main/java/xyz/ox1de/cardash/
 ├── MainActivity.java     home screen: panels, dock, drawer, settings, theme, update UI
 ├── DriveView.java        speed-driven road, top-down car and chase cam; frame scheduling
+├── Pace.java            60 / 30 fps pacing for long animations, measured per unit
 ├── RearScene.java        chase-cam road, buildings and sky (sun, moon, stars, clouds)
 ├── CarArt.java           car rendering on a background thread, tinting, number plate
 ├── ClockView.java        screensaver clock and parked car
@@ -538,7 +559,8 @@ the moment it happens, then switch logging off again and send the newest files.
 - **`cardash-<date>.txt`**: device, Android version, display (resolution, dpi, refresh rate), RAM and
   all CarDash settings, then a timestamped line for everything CarDash does (start-up time,
   lifecycle, screensaver, all-apps, theme, GPS every 10 s, media player and play state, updates,
-  RAM optimiser passes, dash cam connection steps, errors and crashes with stack traces), and every
+  RAM optimiser passes, dash cam connection steps, wake-up timing, the frame rate *Smooth motion*
+  picked and why, car view resizes, errors and crashes with stack traces), and every
   30 s a performance line: frames drawn, slow (> 16 ms) and janky (> 33 ms) frames, frame-time p50 /
   p90 / p99 / max, CPU %, memory (PSS, Java and native heap, free system RAM), threads and the
   hottest temperature sensor the unit exposes.

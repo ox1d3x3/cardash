@@ -1,5 +1,6 @@
 package xyz.ox1de.cardash;
 
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
@@ -14,9 +15,11 @@ import android.graphics.Typeface;
  * roof, turns round once and curls up to sleep, breathing, with little z's floating up. Tap the
  * screen and it startles, leaps off and runs away across the clock; then the dashboard comes back.
  *
- * Cost: all vector shapes (no bitmaps), a handful of paths per frame, nothing allocated while
- * drawing. Smooth 60 fps only while it's moving (about 6 s in, about 1.3 s out); asleep it ticks at
- * 10 fps, which is plenty for slow breathing and drifting z's.
+ * Cost: vector shapes while it moves (about 6 s in, about 1.3 s out), at full rate (half on a slow
+ * unit). Asleep, the curled cat is painted once into a small picture that breathes by scaling, and
+ * the z's are one small picture too: changing paths and text sizes are re-rasterised by the GPU
+ * renderer on every frame, a cached picture isn't. Asleep it ticks at 8-10 fps, plenty for slow
+ * breathing and drifting z's.
  *
  * Cat units: the standing cat is ~100 long with its head towards -y; k = px per cat unit.
  */
@@ -40,6 +43,12 @@ final class SleepyCat {
     final RectF oval = new RectF();
     // fur shading in cat units, built once: the canvas transform scales them with the cat
     final Shader bodySh = shade(0, 4, 30), headSh = shade(0, 0, 15.5f), curlSh = shade(0, 0, 29);
+
+    // the sleeping cat and a "z", painted once (see renderSleeping / renderZ)
+    final Paint pic = new Paint(Paint.FILTER_BITMAP_FLAG);
+    Bitmap sleepBmp, zBmp;
+    float sleepPx = -1, sleepHalf, zPx = -1, zAx, zAy;
+    static final float Z_MAX = 19;          // the biggest z, cat units
 
     long startAt = -1, leaveAt = -1;
     boolean gone;
@@ -113,7 +122,7 @@ final class SleepyCat {
         pose(t, lt, carCx, roofY, bayR, s, k, w, h);
         drawPose(c, k);
         boolean asleep = lt < 0 && t >= SETTLE;
-        return asleep ? SLEEP_FRAME : 0;
+        return asleep ? (Pace.half() ? 125 : SLEEP_FRAME) : 0;
     }
 
     long leaveTotal(long tAtTap) { return tAtTap >= JUMP ? LEAP + RUN : STARTLE + RUN; }
@@ -256,12 +265,16 @@ final class SleepyCat {
         if (curl > 0f) {
             int a = Math.round(255 * curl);
             float g = 0.9f + 0.1f * curl;
-            c.save();
-            c.scale(k * g, k * g);
             float breathe = (1 - (float) Math.cos(2 * Math.PI * sleepT / 3.4)) / 2;
-            drawCurled(c, a, breathe);
-            if (sleepT > 0.8f) drawZ(c, sleepT - 0.8f, a);
-            c.restore();
+            if (curl >= 1f && !bang) {
+                drawSleeping(c, k, sc, breathe);         // fast asleep: the cached picture
+            } else {
+                c.save();
+                c.scale(k * g, k * g);
+                drawCurled(c, a, breathe);
+                if (sleepT > 0.8f) drawZ(c, sleepT - 0.8f, a);
+                c.restore();
+            }
         }
         if (bang) {
             z.setColor(0xFFFFD54A);
@@ -420,6 +433,78 @@ final class SleepyCat {
         for (int sd = -1; sd <= 1; sd += 2)
             for (int i = -1; i <= 1; i++)
                 c.drawLine(sd * r * 0.3f, -r * 0.95f, sd * r * 1.25f, -r * (1.05f + 0.14f * i), line);
+    }
+
+    /** Asleep: the curled cat from its cached picture, breathing by a gentle scale, and the z's. */
+    void drawSleeping(Canvas c, float k, float sc, float breathe) {
+        float px = k * sc;                                  // screen px per cat unit
+        if (sleepBmp == null || Math.abs(px - sleepPx) > 0.01f) renderSleeping(px);
+        if (sleepBmp == null) return;
+        c.save();
+        c.scale(1f / sc, 1f / sc);                          // back to screen pixels: the picture is 1:1
+        float b = 1f + 0.03f * breathe;
+        c.save();
+        c.scale(b, b);
+        pic.setAlpha(255);
+        c.drawBitmap(sleepBmp, -sleepHalf, -sleepHalf, pic);
+        c.restore();
+        if (sleepT > 0.8f) drawZPics(c, sleepT - 0.8f, px);
+        c.restore();
+    }
+
+    void renderSleeping(float px) {
+        int size = (int) Math.ceil(2 * 48 * px) + 2;        // 48 cat units reach the furthest whisker
+        try {
+            if (sleepBmp == null || sleepBmp.getWidth() != size) sleepBmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+            else sleepBmp.eraseColor(0);
+        } catch (Throwable t) {
+            sleepBmp = null;
+            return;
+        }
+        sleepHalf = size / 2f;
+        Canvas bc = new Canvas(sleepBmp);
+        bc.translate(sleepHalf, sleepHalf);
+        bc.scale(px, px);
+        drawCurled(bc, 255, 0f);
+        sleepPx = px;
+    }
+
+    /** The same three drifting z's, from one cached "z" scaled down, instead of text in a new size each frame. */
+    void drawZPics(Canvas c, float t, float px) {
+        if (zBmp == null || Math.abs(px - zPx) > 0.01f) renderZ(px);
+        if (zBmp == null) return;
+        for (int i = 0; i < 3; i++) {
+            float u = (t / 2.6f + i / 3f) % 1f;
+            float al = (float) Math.sin(Math.PI * u);
+            int alpha = Math.round(255 * al * 0.92f);
+            if (alpha < 2) continue;
+            float f = (11 + 8 * u) / Z_MAX;
+            c.save();
+            c.translate((16 + 12 * u + 3 * (float) Math.sin(u * 6)) * px, (-30 - 30 * u) * px);
+            c.scale(f, f);
+            pic.setAlpha(alpha);
+            c.drawBitmap(zBmp, -zAx, -zAy, pic);
+            c.restore();
+        }
+        pic.setAlpha(255);
+    }
+
+    void renderZ(float px) {
+        z.setColor(ZZZ);
+        z.setAlpha(255);
+        z.setTextSize(Z_MAX * px);
+        Paint.FontMetrics fm = z.getFontMetrics();
+        int w = (int) Math.ceil(z.measureText("z")) + 4, h = (int) Math.ceil(fm.descent - fm.ascent) + 4;
+        try {
+            zBmp = Bitmap.createBitmap(Math.max(1, w), Math.max(1, h), Bitmap.Config.ARGB_8888);
+        } catch (Throwable e) {
+            zBmp = null;
+            return;
+        }
+        zAx = w / 2f;
+        zAy = 2 - fm.ascent;                                 // the baseline, as drawText places it
+        new Canvas(zBmp).drawText("z", zAx, zAy, z);
+        zPx = px;
     }
 
     /** Three z's drifting up from the sleeping head, each fading in and out. */

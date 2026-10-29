@@ -3,6 +3,47 @@
 All notable changes to CarDash. Versions follow `MAJOR.MINOR[.PATCH]`; pre-releases are tagged
 `vX.Y-betaN`. Each `## vX.Y` section below becomes the notes of the matching GitHub release.
 
+## v3.4 — 2026-10-29
+
+Tuned from diagnostic logs of a real 2 GB head unit (MT6580, Android 8.1, Mali-400 GPU).
+
+### Fixed
+- **The screensaver no longer runs flat out while the cat sleeps.** Every redraw scheduled another
+  one and the once-a-second clock tick kept starting new chains, so after a few seconds it was
+  redrawing about 58 times a second (80 % CPU, 70 °C after 7 minutes, in the log). Now there is
+  only ever one redraw pending: once a second for the clock, 8-10 a second while the cat breathes.
+- **Driving is much lighter on Android 8.1 and older.** That renderer rasterises every drawn path
+  on the CPU and uploads it as a texture, and the road's buildings, windows and lane dashes are
+  ~100 such paths a frame (140 % CPU while driving in the log). They're now drawn as rectangles
+  under a perspective matrix: same picture, no rasterising.
+- Update check after waking up: a dropped connection (`SSLException` in the log) is retried a few
+  seconds later, a check that still fails retries quietly after 1, 5 and 20 minutes instead of six
+  hours, and it waits until the unit is online. The error now says what went wrong.
+
+### Added
+- **Settings → Smooth motion: Auto / 60 fps / 30 fps.** On a unit that can't finish a frame within
+  one refresh, "60 fps" means uneven motion and a hot CPU; a steady 30 looks smoother and costs
+  half. Auto starts from a guess (32-bit-only units are the slow ones), measures real frame times
+  while the road moves, tries 60 if frames are quick and settles on 30 if 60 can't be held. It
+  paces the road, the screensaver's car and cat, the cloud drift and the stars.
+
+### Changed
+- The sleeping cat is painted once into a small picture that breathes by scaling, and the z's are
+  one small picture too, instead of re-rasterising a dozen shapes and text sizes every frame. The
+  screensaver's media icons are built once.
+- The screensaver's car rolls in after the fade from the dashboard, so the fade is one still
+  picture and nothing draws underneath once it's done.
+- Waking up: the dashboard is drawn first, then location, media sessions and memory figures (slow
+  system calls while the whole unit wakes); the day / night theme switches instantly on wake instead
+  of cross-fading a stale picture.
+- The sky's cloud strip is laid out directly: it no longer forces a second layout pass of the
+  whole screen at start-up. Slow units step the clouds by half a pixel (10 moves a second) and
+  twinkle the stars at 8 fps.
+- Start-up cards get their animation layer up front (it was being built, thrown away and built
+  again); the small Back / Recents keys fade without one.
+- Diagnostic logs: wake-up timing, the frame rate Smooth motion picked and why, and car view
+  resizes with the row heights around it.
+
 ## v3.3 — 2026-10-29
 
 ### Fixed

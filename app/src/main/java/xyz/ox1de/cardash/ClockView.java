@@ -29,6 +29,8 @@ import java.util.Locale;
  * Cost: after the intro, exactly one redraw per second (aligned to the second): one bitmap,
  * 60 lines, a few texts. Strings are rebuilt once per minute. The whole scene drifts a few px
  * every minute so nothing sits on the same pixels for hours (LCD image retention).
+ * While the cat sleeps: 8-10 redraws a second. There is only ever one redraw pending: each draw
+ * replaces it (the 1 s tick used to add another chain each second, until it was redrawing at 60).
  */
 public class ClockView extends View {
 
@@ -74,7 +76,11 @@ public class ClockView extends View {
     final float[] mediaX = new float[3];
     float mediaY = -1, mediaR, mediaHitR;
     final Paint mIcon = new Paint(Paint.ANTI_ALIAS_FLAG), mBg = new Paint(Paint.ANTI_ALIAS_FLAG);
-    final android.graphics.Path mPath = new android.graphics.Path();
+    // icon shapes built once per size around (0,0) and drawn translated: an unchanged path is drawn
+    // from the renderer's cache, a rebuilt one is rasterised again (on every frame while the cat sleeps)
+    final android.graphics.Path playPath = new android.graphics.Path(), prevPath = new android.graphics.Path(),
+            nextPath = new android.graphics.Path();
+    float iconU = -1;
 
     // the cat that comes to sleep on the roof
     final SleepyCat cat = new SleepyCat();
@@ -128,10 +134,36 @@ public class ClockView extends View {
         post(tickR);
     }
 
+    /**
+     * Keep the car out of sight (and its roll-in waiting) while the screensaver is still fading in
+     * over the dashboard: the fade is then one still picture, and the roll-in starts once the
+     * dashboard underneath has stopped drawing.
+     */
+    public void holdIntro(boolean h) {
+        if (introHold == h) return;
+        introHold = h;
+        if (!h && running) invalidate();
+    }
+
+    boolean introHold;
+
     public void stop() {
         running = false;
+        introHold = false;
         removeCallbacks(tickR);
+        removeCallbacks(redrawR);
+        frames.cancel();
         cat.reset();
+    }
+
+    final Runnable redrawR = this::invalidate;
+    final Pace.Frames frames = new Pace.Frames(this);
+
+    /** The next redraw: replaces any pending one, so redraws never pile up. 0 = next animation frame. */
+    void redrawIn(long ms, long now) {
+        removeCallbacks(redrawR);
+        if (ms <= 0) frames.next(now);
+        else { frames.cancel(); postDelayed(redrawR, ms); }
     }
 
     /** Show the media controls (a player session exists) and whether it's playing. */
@@ -389,26 +421,47 @@ public class ClockView extends View {
             }
             mIcon.setColor(pr ? 0xFFFFFFFF : 0xFFAEB4BD);
             float u = r * 0.5f;                                 // icon half-size
-            mPath.rewind();
             if (i == 1 && mediaPlaying) {                      // pause bars
                 cv.drawRect(x - u * 0.75f, y - u, x - u * 0.25f, y + u, mIcon);
                 cv.drawRect(x + u * 0.25f, y - u, x + u * 0.75f, y + u, mIcon);
                 continue;
             }
             if (i == 1) {                                      // play
-                mPath.moveTo(x - u * 0.55f, y - u);
-                mPath.lineTo(x + u * 0.95f, y);
-                mPath.lineTo(x - u * 0.55f, y + u);
+                if (iconU != mediaR) buildIcons(mediaR);
+                cv.save();
+                cv.translate(x, y);
+                cv.drawPath(playPath, mIcon);
+                cv.restore();
             } else {
+                if (iconU != mediaR) buildIcons(mediaR);
                 float d = i == 0 ? -1 : 1;                     // previous / next: triangle + bar
-                mPath.moveTo(x - d * u * 0.7f, y - u * 0.85f);
-                mPath.lineTo(x + d * u * 0.55f, y);
-                mPath.lineTo(x - d * u * 0.7f, y + u * 0.85f);
                 cv.drawRect(Math.min(x + d * u * 0.55f, x + d * u * 0.85f), y - u * 0.85f,
                         Math.max(x + d * u * 0.55f, x + d * u * 0.85f), y + u * 0.85f, mIcon);
+                cv.save();
+                cv.translate(x, y);
+                cv.drawPath(i == 0 ? prevPath : nextPath, mIcon);
+                cv.restore();
             }
-            mPath.close();
-            cv.drawPath(mPath, mIcon);
+        }
+    }
+
+    void buildIcons(float mr) {
+        iconU = mr;
+        float u = mr * 1.12f * 0.5f;                           // play is drawn 12 % bigger
+        playPath.rewind();
+        playPath.moveTo(-u * 0.55f, -u);
+        playPath.lineTo(u * 0.95f, 0);
+        playPath.lineTo(-u * 0.55f, u);
+        playPath.close();
+        u = mr * 0.5f;
+        for (int k = 0; k < 2; k++) {
+            android.graphics.Path p = k == 0 ? prevPath : nextPath;
+            float d = k == 0 ? -1 : 1;
+            p.rewind();
+            p.moveTo(-d * u * 0.7f, -u * 0.85f);
+            p.lineTo(d * u * 0.55f, 0);
+            p.lineTo(-d * u * 0.7f, u * 0.85f);
+            p.close();
         }
     }
 
@@ -424,7 +477,7 @@ public class ClockView extends View {
         float sy = carT + (spec.nose - 20) * s;
         cv.drawRoundRect(carCx - 46 * s, sy - 5 * s, carCx + 46 * s, sy + 5 * s, 5 * s, 5 * s, stop);
 
-        if (car == null) { cv.restoreToCount(sv); return; }
+        if (car == null || (introHold && introPending)) { cv.restoreToCount(sv); return; }
 
         long now = SystemClock.uptimeMillis();
         if (introPending && running) { introPending = false; introAt = now; }
@@ -474,8 +527,9 @@ public class ClockView extends View {
         }
         cv.restoreToCount(sv);
         if (!running) return;
-        if (intro || catNext == 0) postInvalidateOnAnimation();
-        else if (catNext > 0 && catNext < 1000) postInvalidateDelayed(catNext);
+        if (intro || catNext == 0) redrawIn(0, now);
+        else if (catNext > 0 && catNext < 1000) redrawIn(catNext, now);
+        else { removeCallbacks(redrawR); frames.cancel(); }   // the 1 s tick is enough
     }
 
     void glow(Canvas cv, float x, float y, Paint p) {
