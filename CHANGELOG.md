@@ -3,6 +3,16 @@
 All notable changes to CarDash. Versions follow `MAJOR.MINOR[.PATCH]`; pre-releases are tagged
 `vX.Y-betaN`. Each `## vX.Y` section below becomes the notes of the matching GitHub release.
 
+## v3.4.1 — 2026-10-29
+
+### Fixed
+- **No more white outline round the tyres in the chase-cam view at night.** The rear car was cut
+  out of a drawing on a white background, and the soft pixels along its edges still carried some
+  of that white: invisible on the light day road, a thin light line round the tyres and under the
+  bumper on the dark night road (on the dark car round its whole outline). Those edge pixels now
+  take the colour of the tyre or paint just inside them; the outline's shape and smooth edges are
+  unchanged. The art script does the same for any future rebuild (`tools/rearart/defringe.py`).
+
 ## v3.4 — 2026-10-29
 
 Tuned from diagnostic logs of a real 2 GB head unit (MT6580, Android 8.1, Mali-400 GPU).

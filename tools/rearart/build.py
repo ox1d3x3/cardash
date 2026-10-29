@@ -3,7 +3,7 @@ CarDash rear-view art from the owner's straight-on design (src.jpg: white car le
 Turns the sketchy illustration into a clean, glossy, semi-realistic render:
   cut-out -> logo marks removed -> perfectly symmetric (left half mirrored) -> denoised ->
   ink lines softened -> tone (brighter, punchier) -> lamps rebuilt (clean off / on versions) ->
-  procedural clearcoat reflections on their own layer.
+  procedural clearcoat reflections on their own layer -> edges cleaned of the white background (defringe.py).
 Outputs (viewport 300 x 220 units, ground y = 214, PX px per unit):
   rear2_<car>_base   car, lamps off, no reflections
   rear2_<car>_gloss  clearcoat reflections (white, alpha) - drawn over the paint, never tinted
@@ -236,6 +236,11 @@ for name, c in CARS.items():
             im = Image.merge('RGBA', (*rgb.split(), a_))
         canvas = Image.new('RGBA', (Wc, Hc), (0, 0, 0, 0))
         canvas.alpha_composite(im, (round(ox * PX), round(oy * PX)))
+        if fname.endswith('_base') or fname.endswith('_paint'):
+            # the cut-out's edge pixels still carry the drawing's white background: give them the
+            # colour of the surface just inside (no white outline round the tyres on a dark road)
+            from defringe import defringe
+            canvas = Image.fromarray(defringe(np.asarray(canvas))[0], 'RGBA')
         canvas.save(f'{OUT}/{fname}.webp', 'WEBP', quality=92, method=6, alpha_quality=100)
         canvas.save(f'{OUT}/{fname}.png')
     place(base, al, f'rear2_{name}_base')
