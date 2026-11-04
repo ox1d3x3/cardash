@@ -19,8 +19,10 @@ import android.view.View;
  *
  * Lights (both views):
  *  - 6 pm - 5 am: headlamps power on with an LED-style ramp, beams on the road, tail lamps glow
- *  - brake lights pop on only when the speed drops suddenly (firm braking), held while it keeps
- *    dropping, then fade; the bloom flares and (rear view) the car's tail lifts a touch as they bite
+ *  - slowing down: the stop lamps glow softly, brighter the quicker the car slows (a smoothed
+ *    deceleration from GPS), and fade out once it stops slowing
+ *  - braking (from ~1.3 m/s^2): they pop on at full strength, held while it keeps slowing that
+ *    hard, then fade; the bloom flares and (rear view) the car's tail lifts a touch as they bite
  *  - start-up "welcome": the car fades/rises in and the lamps flash
  *  - colour / theme / body-style / plate changes cross-fade between the old and new car
  *
@@ -67,6 +69,13 @@ public class DriveView extends View {
     float target, shown, offset, dashOff, blkOff, moveT, brakeT, head, tailRun, swapT = 1f;
     boolean night, active, light, welcomePending;
     long brakeUntil, brakeOnAt = -1, lastFrame, refAt, welcomeAt = -1, headOnAt = -1;
+    // gentle slowing: smoothed deceleration (m/s^2) from successive fixes -> a soft stop-lamp glow
+    float decel, prevMs, slowGoal, slowT;
+    long prevAt, brakeLogAt;
+
+    static final float HARD = 1.3f;        // m/s^2 (~4.7 km/h per second): full brake lights
+    static final float HOLD = 0.8f;        // m/s^2: once braking, they stay on while it slows at least this hard
+    static final float SLOW_FROM = 0.45f;  // m/s^2 (~1.6 km/h per second): the soft glow starts
     float skyT;                 // chase-cam sky: 0 = day .. 1 = night, animated (sunset / sunrise)
     boolean skyInit;
 
@@ -87,29 +96,62 @@ public class DriveView extends View {
     public void setSpeed(float ms) {
         long now = SystemClock.uptimeMillis();
         if (ms < 0) {
-            boolean still = target == 0 && shown == 0;
+            boolean still = target == 0 && shown == 0 && slowT == 0;
             target = 0;
             refAt = 0;
+            prevAt = 0;
+            decel = 0;
+            slowGoal = 0;
             if (!still) kick();
             return;
         }
-        // Brake lights: only for a SUDDEN drop. Measured over >= 0.4 s windows so it works the same
-        // with 1 Hz and 10 Hz GPS; >= 1.8 m/s^2 (~6.5 km/h per second) is firm braking, coasting
-        // and gentle slowing don't count; > 12 m/s^2 is impossible for a car = GPS glitch, ignored.
+        // Speed changes are measured over >= 0.4 s windows, so 1 Hz and 10 Hz GPS behave the same.
+        // > 12 m/s^2 is impossible for a car: a GPS glitch, ignored.
+        //
+        // Braking: a drop of >= 1.3 m/s^2 (~4.7 km/h per second) in one window lights the stop lamps
+        // at full strength. They stay on while each new reading still shows >= 0.8 m/s^2, so braking
+        // that hovers near the threshold (and GPS jitter) can't make them blink off and pop again.
         if (refAt == 0 || now - refAt > 3000) {
             refAt = now;
             refMs = ms;
         } else if (now - refAt >= 400) {
-            float dt = (now - refAt) / 1000f, drop = refMs - ms, decel = drop / dt;
-            if (refMs > 2.5f && drop > 0.8f && decel > 1.8f && decel < 12f) {
-                if (now >= brakeUntil) brakeOnAt = now;          // a fresh press: pop
+            float dt = (now - refAt) / 1000f, drop = refMs - ms, d = drop / dt;
+            boolean braking = now < brakeUntil;
+            if (refMs > 2.5f && d < 12f && ((drop > 0.5f && d > HARD) || (braking && d > HOLD))) {
+                if (!braking) {                                   // a fresh press: pop
+                    brakeOnAt = now;
+                    if (Diag.on != null && now - brakeLogAt > 2000) {
+                        brakeLogAt = now;
+                        Diag.log("drive", String.format(java.util.Locale.US, "braking %.1f m/s² at %.0f km/h", d, refMs * 3.6f));
+                    }
+                }
                 brakeUntil = now + Math.max(900, (long) (dt * 1000) + 400); // held until the next reading
             }
             refAt = now;
             refMs = ms;
         }
+        // Slowing: the deceleration between fixes, smoothed over ~1 s (one noisy fix can't light it;
+        // the jitter of a GPS speed at a steady speed stays below the threshold), sets a soft glow that
+        // grows with how quickly the car slows. Below ~5 km/h the reading is mostly noise: no glow.
+        // (Tuned on simulated 1 Hz GPS: steady cruising with normal jitter stays dark, ~0.8 m/s^2 of
+        // slowing glows a clear low red, braking near the threshold pops once, not twice.)
+        if (prevAt == 0 || now - prevAt > 3000) {
+            prevAt = now;
+            prevMs = ms;
+            decel = 0;
+        } else if (now - prevAt >= 250) {
+            float dt = (now - prevAt) / 1000f, d = (prevMs - ms) / dt;
+            if (d > 12f || d < -12f) d = 0;
+            decel += (d - decel) * (1f - (float) Math.exp(-dt / 0.9f));
+            boolean moving = Math.max(prevMs, ms) > 1.5f;
+            // rises early (a curve, not a straight line), so ordinary slowing already reads clearly
+            float k = Math.max(0f, Math.min(1f, (decel - SLOW_FROM) / (HARD - SLOW_FROM)));
+            slowGoal = moving && k > 0 ? (float) Math.pow(k, 0.7) : 0f;
+            prevAt = now;
+            prevMs = ms;
+        }
         // parked and staying parked: nothing to redraw (this used to cost a frame per GPS fix)
-        boolean still = ms == 0 && target == 0 && shown == 0 && now >= brakeUntil;
+        boolean still = ms == 0 && target == 0 && shown == 0 && now >= brakeUntil && slowGoal == 0 && slowT == 0;
         target = ms;
         if (!still) kick();
     }
@@ -360,6 +402,11 @@ public class DriveView extends View {
         moveT = approach(moveT, mGoal, dt / 0.45f);
         boolean bOn = now < brakeUntil;
         brakeT = approach(brakeT, bOn ? 1f : 0f, dt / (bOn ? 0.08f : 0.5f)); // snaps on, fades off
+        // the slowing glow eases towards its level: up in ~0.3 s, down in ~0.6 s (no steps between fixes)
+        if (slowT != slowGoal) {
+            slowT += (slowGoal - slowT) * (1f - (float) Math.exp(-dt / (slowGoal > slowT ? 0.12f : 0.25f)));
+            if (Math.abs(slowGoal - slowT) < 0.004f) slowT = slowGoal;
+        }
         head = approach(head, night ? 1f : 0f, dt / (night ? 0.7f : 0.5f));
         tailRun = approach(tailRun, night ? 1f : 0f, dt / 0.6f);
         swapT = approach(swapT, 1f, dt / 0.45f);
@@ -376,7 +423,7 @@ public class DriveView extends View {
 
         return shown > 0 || Math.abs(target - shown) > 0.01f || moveT != mGoal || brakeT != (bOn ? 1f : 0f) || bOn
                 || head != (night ? 1f : 0f) || tailRun != (night ? 1f : 0f) || swapT < 1f || welcoming || ramp || popping
-                || skyT != skyGoal;
+                || skyT != skyGoal || slowT != slowGoal;
     }
 
     @Override
@@ -391,15 +438,20 @@ public class DriveView extends View {
         float pop = brakeOnAt >= 0 ? bump((now - brakeOnAt) / 1000f, 0f, 0.32f) : 0f;
         float rampT = headOnAt >= 0 ? (now - headOnAt) / 1000f : 9f;
         float lens = Math.min(1.25f, head + 0.35f * bump(rampT, 0.05f, 0.5f) + flash);
-        // night: tail lamps at half strength; braking (day or night): full, with a flare as they pop on
-        float lamp = Math.min(1f, Math.max(brakeT, 0.5f * tailRun) + 0.7f * flash + 0.25f * pop);
-        float halo = Math.min(1f, Math.max(brakeT, 0.28f * tailRun) + 0.7f * flash);
+        // night: tail lamps at half strength. Slowing: a soft glow on top, up to just over half way to
+        // full. Braking (day or night): full, with a flare as they pop on.
+        float run = 0.5f * tailRun, runHalo = 0.28f * tailRun;
+        float slowLamp = run + (1f - run) * 0.6f * slowT;
+        float slowHalo = runHalo + (1f - runHalo) * 0.45f * slowT;
+        float lamp = Math.min(1f, Math.max(brakeT, slowLamp) + 0.7f * flash + 0.25f * pop);
+        float halo = Math.min(1f, Math.max(brakeT, slowHalo) + 0.7f * flash);
+        float roadGlow = Math.min(1f, Math.max(brakeT, 0.35f * slowT) + 0.7f * flash);
 
         if (view == REAR && drawnView == REAR) {
             float n = ease3(skyT);
             if (sky != null) sky.setNight(n);
             rear.draw(c, now, n, car, oldView == REAR ? oldCar : null, swapT, tailLit, pad, rspec,
-                    dashOff, blkOff, moveT, head, lamp, halo, Math.min(1f, brakeT + 0.7f * flash), pop, appear);
+                    dashOff, blkOff, moveT, head, lamp, halo, roadGlow, pop, appear);
         } else if (view == TOP && drawnView != REAR) {
             drawTop(c, appear, lens, lamp, halo, pop);
         }

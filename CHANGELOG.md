@@ -3,6 +3,23 @@
 All notable changes to CarDash. Versions follow `MAJOR.MINOR[.PATCH]`; pre-releases are tagged
 `vX.Y-betaN`. Each `## vX.Y` section below becomes the notes of the matching GitHub release.
 
+## v3.5 — 2026-11-04
+
+### Added
+- **The stop lamps glow softly while you slow down**, brighter the quicker you slow, up to just
+  over half strength, and ease back off once you stop slowing (from about 1.6 km/h per second; at
+  night on top of the running lamps). The deceleration is smoothed over about a second, so GPS
+  jitter at a steady speed doesn't light them, and the glow eases instead of stepping with each GPS
+  reading. A faint red reflection shows on the road at night.
+
+### Changed
+- **Brake lights are more sensitive**: full brake lights from about 4.7 km/h per second of slowing
+  (was 6.5), with the same pop and flare. Once on, they stay on while the car keeps slowing at least
+  about 3 km/h per second, so braking right at the threshold (or GPS jitter) can't make them blink
+  off and pop again. Tuned on simulated 1 Hz GPS traces: steady cruising, coasting, gentle slowing,
+  braking.
+- Diagnostic logs note each brake press with its deceleration and speed, for tuning on real drives.
+
 ## v3.4.1 — 2026-10-29
 
 ### Fixed

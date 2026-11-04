@@ -47,7 +47,7 @@ no third-party libraries, an APK under 0.5 MB, and zero frames drawn when nothin
 | Day | Night |
 | :---: | :---: |
 | <img src="docs/images/chase-day.webp" alt="Chase-cam view by day: blue sky, sun and clouds" width="430"> | <img src="docs/images/chase-night-braking.webp" alt="Chase-cam view at night while braking: brake lights and road glow" width="430"> |
-| **Chase cam**: sun, clouds and your own number plate | **Sudden stop**: brake lights pop, the road glows red |
+| **Chase cam**: sun, clouds and your own number plate | **Braking**: brake lights pop, the road glows red |
 | <img src="docs/images/top-down-day.webp" alt="Top-down car view by day" width="430"> | <img src="docs/images/top-down-night.webp" alt="Top-down car view at night with headlight beams" width="430"> |
 | **Top-down view**: lamps off by day | **Top-down at night**: LED headlamps and beams |
 | <img src="docs/images/dashcam-layout.webp" alt="Dash cam layout: car, live camera tile and compact player" width="430"> | <img src="docs/images/screensaver.webp" alt="Screensaver: parked car beside a ring clock" width="430"> |
@@ -65,7 +65,8 @@ no third-party libraries, an APK under 0.5 MB, and zero frames drawn when nothin
 - **Live car on the road**: a glossy car that drives with your GPS speed, in a **top-down** or
   **chase-cam** view, in hatchback or sedan form and any paint colour.
 - **Lights that behave like a car's**: headlamps and tail lamps from 6 pm to 5 am (or real
-  sunset to sunrise); **brake lights pop only on a sudden speed drop**, never on gentle slowing.
+  sunset to sunrise); the stop lamps **glow softly while you slow down** (brighter the quicker you
+  slow) and **pop on at full strength when you brake**.
 - **Living sky**: sun, clouds and blue sky by day; moon, twinkling stars, shooting stars and lit
   windows at night, with a dusk transition.
 - **Your number plate** on the back of the car, and **your own badge**: chrome lettering you type,
@@ -200,10 +201,15 @@ updates itself, so there is nothing to copy over by USB after the first install.
 
 - From 6 pm to 5 am (or real sunset to sunrise in that theme mode), the LED headlamps power on with
   a quick ramp, the beams light the road and the tail lamps glow. In the day all lamps stay off.
-- Day or night, the **brake lights pop on only when the speed drops suddenly**: firm braking,
-  about 6.5 km/h per second or more, measured over at least 0.4 s so 1 Hz and 10 Hz GPS behave the
-  same. They snap on with a flare, stay on while the speed keeps falling, then fade. Gentle slowing
-  and coasting never light them, and impossible jumps (GPS glitches) are ignored.
+- Day or night, **slowing down makes the stop lamps glow softly**: from about 1.6 km/h per second
+  of slowing, brighter the quicker the car slows, up to just over half strength. The deceleration is
+  smoothed over about a second, so GPS jitter at a steady speed doesn't light them, and the glow
+  eases up and down instead of stepping with each GPS reading. Below about 5 km/h it stays off.
+- **Braking** (about 4.7 km/h per second or more, measured over at least 0.4 s so 1 Hz and 10 Hz
+  GPS behave the same) **pops them on at full strength** with a flare. They stay on while the car
+  keeps slowing at least about 3 km/h per second, so braking right at the threshold can't make
+  them blink off and pop again, then fade back to the slowing glow. Impossible jumps (GPS glitches)
+  are ignored.
 - In the chase cam the high-mounted stop lamp lights too, the road glows red under the bumper and
   the car's tail lifts a touch as the brakes bite.
 - On start-up the car fades in and the lamps flash once.
